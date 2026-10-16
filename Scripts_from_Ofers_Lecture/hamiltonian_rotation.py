@@ -29,7 +29,7 @@ def main():
     V3 = V3 / np.linalg.norm(V3)
     V4 = V4 / np.linalg.norm(V4)
 
-    Psi = V1 / np.linalg.norm(V1)
+    Psi = V1
 
     E1 = -0.5
     E2 = 0.5
