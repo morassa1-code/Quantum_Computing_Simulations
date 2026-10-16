@@ -48,7 +48,7 @@ def main():
     alpha = 13 / 3     # (E3 - Ebar) / (hbar*nu/2), from the infinite-well energies
 
     # Initial state: full 3-level state starts in |psi1> (normalized)
-    Psi3_t = V1 / np.linalg.norm(V1)
+    Psi3_t = V1 
 
     # Ideal 2-level (qubit-only) state: same initial condition, restricted
     # to the {|psi1>, |psi2>} subspace
