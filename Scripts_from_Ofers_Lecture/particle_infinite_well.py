@@ -82,6 +82,8 @@ def main():
 
         # Explicit Euler step of the Schrodinger equation:
         #   d|psi>/dt = -(i/hbar) H |psi>
+        # first-order Taylor approximation to the true propagator exp(−iĤdt/ℏ):
+        # |ψ(t+dt)⟩ ≈ |ψ(t)⟩ − dt · (i/ℏ) · Ĥ|ψ(t)⟩
         Psi3_t = Psi3_t - dt * 1j * (H @ Psi3_t) / hbar
         Psi2_t = Psi2_t - dt * 1j * (H[:2, :2] @ Psi2_t) / hbar
 
