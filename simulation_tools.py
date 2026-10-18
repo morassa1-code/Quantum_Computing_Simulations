@@ -73,6 +73,46 @@ class DrivePulse:
         plt.grid()
         plt.show()
 
+    def plot_bloch_trajectory(self, qubit, psi0=None, t0=0.0):
+        """
+        Simulate this pulse acting on `qubit` and plot the state's path on
+        the Bloch sphere, projected onto the |0>,|1> subspace (any
+        population leaked to |2>, |3>, ... just shrinks the vector's
+        length, since the projection is renormalized at every step).
+        """
+        t_vals, psi_traj = qubit.apply_gate(self, psi0=psi0, t0=t0)
+
+        c0, c1 = psi_traj[:, 0], psi_traj[:, 1]
+        norm = np.sqrt(np.abs(c0) ** 2 + np.abs(c1) ** 2)
+        c0, c1 = c0 / norm, c1 / norm
+
+        bloch_x = 2 * np.real(np.conj(c0) * c1)
+        bloch_y = 2 * np.imag(np.conj(c0) * c1)
+        bloch_z = np.abs(c0) ** 2 - np.abs(c1) ** 2
+
+        fig = plt.figure(figsize=(6, 6))
+        ax = fig.add_subplot(111, projection='3d')
+
+        u, v = np.mgrid[0:2 * np.pi:40j, 0:np.pi:20j]
+        ax.plot_wireframe(np.cos(u) * np.sin(v), np.sin(u) * np.sin(v), np.cos(v),
+                           color='lightgray', linewidth=0.5, alpha=0.4)
+        ax.plot([-1, 1], [0, 0], [0, 0], color='gray', linewidth=0.5)
+        ax.plot([0, 0], [-1, 1], [0, 0], color='gray', linewidth=0.5)
+        ax.plot([0, 0], [0, 0], [-1, 1], color='gray', linewidth=0.5)
+        ax.text(0, 0, 1.15, r'$|0\rangle$', ha='center')
+        ax.text(0, 0, -1.25, r'$|1\rangle$', ha='center')
+
+        ax.plot(bloch_x, bloch_y, bloch_z, color='b', linewidth=2)
+        ax.scatter(bloch_x[0], bloch_y[0], bloch_z[0], color='g', s=60, label='initial')
+        ax.scatter(bloch_x[-1], bloch_y[-1], bloch_z[-1], color='r', s=60, label='final')
+
+        ax.set_box_aspect([1, 1, 1])
+        ax.set_title(f'{self.__class__.__name__} (angle={self.angle:.3f}) on Bloch sphere')
+        ax.legend()
+        plt.show()
+
+        return bloch_x, bloch_y, bloch_z
+
 
 class XGate(DrivePulse):
     def __init__(self, angle=np.pi, **kwargs):
@@ -151,6 +191,11 @@ class TransmonQubit:
         - no RWA, no 2-level truncation, so leakage out of the qubit
         subspace (into |2>, etc.) shows up naturally. Step size is set by
         the pulse's own sample_rate.
+
+        Returns the time grid and the full complex state at every step
+        (shape (len(t_vals), n_levels)), so callers can get populations
+        (abs(psi_traj)**2), the final state (psi_traj[-1]), or the relative
+        phase between levels (needed for a Bloch-sphere trajectory).
         """
         if psi0 is None:
             psi0 = self.ground_state
@@ -160,16 +205,14 @@ class TransmonQubit:
         w_d = pulse.drive_frequency if pulse.drive_frequency is not None else self.omega_q
         drive_op = self.a + self.a_dag
 
-        psi = psi0.copy()
-        populations = np.empty((len(t_vals), self.n_levels))
-        populations[0] = np.abs(psi) ** 2
+        psi_traj = np.empty((len(t_vals), self.n_levels), dtype=complex)
+        psi_traj[0] = psi0
 
         for i in range(len(t_vals) - 1):
             t = t_vals[i]
             Om = pulse.envelope(t, t0) * np.cos(w_d * t + pulse.phase)
             H = self.H0 + Om * drive_op
-            psi = expm(-1j * H * dt / self.hbar) @ psi
-            populations[i + 1] = np.abs(psi) ** 2
+            psi_traj[i + 1] = expm(-1j * H * dt / self.hbar) @ psi_traj[i]
 
-        return t_vals, psi, populations
+        return t_vals, psi_traj
 
