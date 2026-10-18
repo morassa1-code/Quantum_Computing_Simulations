@@ -16,7 +16,7 @@ class DrivePulse:
     """
 
     def __init__(self, angle=np.pi, phase=0.0, sigma=10.0, n_sigma=4,
-                 sample_rate=200.0, drive_frequency=None):
+                 sample_rate=200.0, drive_frequency=None, drag_coeff=0.0):
         """
         Parameters
         ----------
@@ -32,6 +32,13 @@ class DrivePulse:
             The sampling rate of the pulse (in arbitrary units).
         drive_frequency : float, optional
             The frequency of the drive field. If None, it is set to the qubit frequency.
+        drag_coeff : float
+            DRAG coefficient (lambda). 0 (default) disables DRAG. When nonzero,
+            a second quadrature proportional to -(drag_coeff/alpha)*dOmega/dt is
+            added 90 degrees out of phase with the main drive, cancelling (to
+            first order) the AC-Stark phase error from off-resonantly driving
+            the |1>-|2> transition. 1.0 is the standard first-order value;
+            requires the qubit's anharmonicity (alpha) at simulation time.
         """
         self.angle = angle
         self.phase = phase
@@ -39,6 +46,7 @@ class DrivePulse:
         self.n_sigma = n_sigma
         self.sample_rate = sample_rate
         self.drive_frequency = drive_frequency  # resonant with the qubit if None
+        self.drag_coeff = drag_coeff
 
     @property
     def envelope_duration(self):
@@ -73,16 +81,36 @@ class DrivePulse:
         plt.grid()
         plt.show()
 
-    def plot_bloch_trajectory(self, qubit, psi0=None, t0=0.0):
+    def plot_bloch_trajectory(self, qubit, psi0=None, t0=0.0, frame='lab'):
         """
         Simulate this pulse acting on `qubit` and plot the state's path on
         the Bloch sphere, projected onto the |0>,|1> subspace (any
         population leaked to |2>, |3>, ... just shrinks the vector's
         length, since the projection is renormalized at every step).
+
+        frame : 'lab' or 'rotating'
+            'lab' plots the raw simulated state: since apply_gate does no
+            RWA, this includes the free precession around Z at omega_q
+            (from H0 alone, nothing to do with the pulse), which winds the
+            trajectory around the sphere many times during a pulse much
+            longer than 1/omega_q.
+            'rotating' removes that free precession by multiplying the |1>
+            amplitude by exp(i*w_d*t) (w_d = this pulse's drive frequency)
+            before computing the Bloch vector, leaving just the rotation
+            the drive implements - the same demodulation trick used to
+            read out Rabi oscillations experimentally. When w_d ==
+            qubit.omega_q (resonant drive, the default), this is the frame
+            in which H0 is exactly cancelled, labeled the Heisenberg frame.
         """
         t_vals, psi_traj = qubit.apply_gate(self, psi0=psi0, t0=t0)
 
         c0, c1 = psi_traj[:, 0], psi_traj[:, 1]
+        w_d = self.drive_frequency if self.drive_frequency is not None else qubit.omega_q
+        if frame == 'rotating':
+            c1 = c1 * np.exp(1j * w_d * t_vals)
+        elif frame != 'lab':
+            raise ValueError("frame must be 'lab' or 'rotating'")
+
         norm = np.sqrt(np.abs(c0) ** 2 + np.abs(c1) ** 2)
         c0, c1 = c0 / norm, c1 / norm
 
@@ -93,21 +121,45 @@ class DrivePulse:
         fig = plt.figure(figsize=(6, 6))
         ax = fig.add_subplot(111, projection='3d')
 
-        u, v = np.mgrid[0:2 * np.pi:40j, 0:np.pi:20j]
-        ax.plot_wireframe(np.cos(u) * np.sin(v), np.sin(u) * np.sin(v), np.cos(v),
-                           color='lightgray', linewidth=0.5, alpha=0.4)
-        ax.plot([-1, 1], [0, 0], [0, 0], color='gray', linewidth=0.5)
-        ax.plot([0, 0], [-1, 1], [0, 0], color='gray', linewidth=0.5)
-        ax.plot([0, 0], [0, 0], [-1, 1], color='gray', linewidth=0.5)
-        ax.text(0, 0, 1.15, r'$|0\rangle$', ha='center')
-        ax.text(0, 0, -1.25, r'$|1\rangle$', ha='center')
+        # flat, matte sphere: a single smooth surface, no latitude/longitude grid
+        u, v = np.mgrid[0:2 * np.pi:60j, 0:np.pi:30j]
+        ax.plot_surface(np.cos(u) * np.sin(v), np.sin(u) * np.sin(v), np.cos(v),
+                         color='lightgray', alpha=0.25, linewidth=0,
+                         edgecolor='none', shade=False, antialiased=True)
 
-        ax.plot(bloch_x, bloch_y, bloch_z, color='b', linewidth=2)
+        # x/y/z axes through the sphere, labeled by their Bloch eigenstates
+        axis_len = 1.3
+        for dx, dy, dz in [(1, 0, 0), (0, 1, 0), (0, 0, 1)]:
+            ax.plot([-axis_len * dx, axis_len * dx],
+                    [-axis_len * dy, axis_len * dy],
+                    [-axis_len * dz, axis_len * dz],
+                    color='gray', linewidth=0.8)
+
+        label_pos = 1.4
+        ax.text(0, 0, label_pos, r'$|0\rangle$ (+Z)', ha='center')
+        ax.text(0, 0, -label_pos, r'$|1\rangle$ (-Z)', ha='center')
+        ax.text(label_pos, 0, 0, r'$|+\rangle$ (+X)', ha='center')
+        ax.text(-label_pos, 0, 0, r'$|-\rangle$ (-X)', ha='center')
+        ax.text(0, label_pos, 0, r'$|{+i}\rangle$ (+Y)', ha='center')
+        ax.text(0, -label_pos, 0, r'$|{-i}\rangle$ (-Y)', ha='center')
+
+        ax.plot(bloch_x, bloch_y, bloch_z, color='crimson', linewidth=2)
         ax.scatter(bloch_x[0], bloch_y[0], bloch_z[0], color='g', s=60, label='initial')
         ax.scatter(bloch_x[-1], bloch_y[-1], bloch_z[-1], color='r', s=60, label='final')
 
         ax.set_box_aspect([1, 1, 1])
-        ax.set_title(f'{self.__class__.__name__} (angle={self.angle:.3f}) on Bloch sphere')
+        ax.set_xlim(-label_pos, label_pos)
+        ax.set_ylim(-label_pos, label_pos)
+        ax.set_zlim(-label_pos, label_pos)
+        ax.set_axis_off()
+        if frame == 'lab':
+            frame_label = 'lab frame'
+        elif w_d == qubit.omega_q:
+            frame_label = 'Heisenberg frame'
+        else:
+            frame_label = 'rotating frame (drive)'
+        ax.set_title(f'{self.__class__.__name__} (angle={self.angle:.3f}) on Bloch sphere '
+                     f'[{frame_label}]')
         ax.legend()
         plt.show()
 
