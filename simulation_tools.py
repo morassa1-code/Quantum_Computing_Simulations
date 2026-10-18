@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy.linalg import expm
 
 
 class DrivePulse:
@@ -99,4 +100,76 @@ class ZGate:
     def apply_to(self, pulse):
         pulse.phase += self.angle
         return pulse
+
+
+class TransmonQubit:
+    """
+    Truncated (n_levels) transmon: a weakly anharmonic Josephson-junction
+    oscillator, approximated as a Duffing oscillator in the Fock basis
+    |0>, |1>, ..., |n_levels-1>:
+
+        E_n = n*omega_q + (alpha/2)*n*(n-1)
+
+    omega_q is the 0<->1 transition frequency and alpha < 0 is the
+    anharmonicity, which separates the 1<->2 transition from the 0<->1
+    one and is what makes single-qubit gates imperfect (leakage into |2>).
+    """
+
+    def __init__(self, omega_q=5.0, alpha=-0.3, n_levels=4, hbar=1.0):
+        self.omega_q = omega_q
+        self.alpha = alpha
+        self.n_levels = n_levels
+        self.hbar = hbar
+
+    @property
+    def energies(self):
+        n = np.arange(self.n_levels)
+        return n * self.omega_q + 0.5 * self.alpha * n * (n - 1)
+
+    @property
+    def H0(self):
+        return np.diag(self.energies).astype(complex)
+
+    @property
+    def a(self):
+        return np.diag(np.sqrt(np.arange(1, self.n_levels)), k=1).astype(complex)
+
+    @property
+    def a_dag(self):
+        return self.a.conj().T
+
+    @property
+    def ground_state(self):
+        psi0 = np.zeros(self.n_levels, dtype=complex)
+        psi0[0] = 1.0
+        return psi0
+
+    def apply_gate(self, pulse, psi0=None, t0=0.0):
+        """
+        Propagate a state through a drive pulse by direct time integration
+        of the full lab-frame Hamiltonian H0 + Omega(t)*cos(w_d t+phase)*(a+a_dag)
+        - no RWA, no 2-level truncation, so leakage out of the qubit
+        subspace (into |2>, etc.) shows up naturally. Step size is set by
+        the pulse's own sample_rate.
+        """
+        if psi0 is None:
+            psi0 = self.ground_state
+
+        t_vals = pulse.time_array(t0)
+        dt = t_vals[1] - t_vals[0]
+        w_d = pulse.drive_frequency if pulse.drive_frequency is not None else self.omega_q
+        drive_op = self.a + self.a_dag
+
+        psi = psi0.copy()
+        populations = np.empty((len(t_vals), self.n_levels))
+        populations[0] = np.abs(psi) ** 2
+
+        for i in range(len(t_vals) - 1):
+            t = t_vals[i]
+            Om = pulse.envelope(t, t0) * np.cos(w_d * t + pulse.phase)
+            H = self.H0 + Om * drive_op
+            psi = expm(-1j * H * dt / self.hbar) @ psi
+            populations[i + 1] = np.abs(psi) ** 2
+
+        return t_vals, psi, populations
 
