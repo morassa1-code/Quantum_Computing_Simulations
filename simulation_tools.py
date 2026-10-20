@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.linalg import expm
+from scipy.differentiate import derivative
 
 
 class DrivePulse:
@@ -56,8 +57,14 @@ class DrivePulse:
     def envelope_amplitude(self):
         return self.angle / (self.sigma * np.sqrt(2 * np.pi))
 
-    def envelope(self, t, t0=0.0):
-        return self.envelope_amplitude * np.exp(-(t - t0) ** 2 / (2 * self.sigma ** 2))
+    def envelope(self, t, t0=0.0, shape='gaussian'):
+        if shape == 'gaussian':
+            return self.envelope_amplitude * np.exp(-(t - t0) ** 2 / (2 * self.sigma ** 2))
+        elif shape == 'square':
+            return self.envelope_amplitude * np.where(
+                np.abs(t - t0) <= self.n_sigma * self.sigma, 1.0, 0.0)
+        else:
+            raise ValueError("Unsupported envelope shape")
 
     def time_array(self, t0=0.0):
         dt = 1.0 / self.sample_rate
@@ -69,6 +76,11 @@ class DrivePulse:
         t = self.time_array(t0)
         w_d = self.drive_frequency if self.drive_frequency is not None else omega_q
         return t, self.envelope(t, t0) * np.cos(w_d * t + self.phase)
+
+    # def DRAG_scheme(self, omega_q, t0=0.0):
+    #     self.deriviate = derivative(self.drive_signal(omega_q, t0)[1], self.time_array(t0), preserve_shape=True)
+    #     self.drive_signal(omega_q, t0)[1] += -(self.drag_coeff / omega_q) * self.deriviate
+
 
     def plot(self, omega_q, t0=0.0):
         t, signal = self.drive_signal(omega_q, t0)
@@ -164,6 +176,37 @@ class DrivePulse:
         plt.show()
 
         return bloch_x, bloch_y, bloch_z
+
+    def frequency_spectrum(self, omega_q=None, plot=True, n_fft=2**17):
+        """
+        Compute the Fourier transform of the drive signal, centered on the drive frequency (or the qubit frequency if drive_frequency is None).
+        Returns the angular frequencies and the corresponding Fourier transform of the signal.
+        omega_q : float, optional
+            The qubit frequency. If None, it is set to the drive frequency.
+        plot : bool, optional
+            If True, plots the magnitude of the Fourier transform around the drive frequency.
+        n_fft : int, optional
+            The number of points to use in the FFT. Default is 2**15 for zero padding.
+        """
+        _, signal = self.drive_signal(omega_q)
+        signal_ft = np.fft.fftshift(np.fft.fft(signal, n=n_fft))
+        # angular frequency, same units as omega_q
+        freqs = 2 * np.pi * np.fft.fftshift(
+            np.fft.fftfreq(n_fft, d=1.0 / self.sample_rate))
+        if plot:
+            w_d = self.drive_frequency if self.drive_frequency is not None else omega_q
+            half_width = 10.0 / self.sigma  # ~10 spectral widths either side
+            plt.plot(freqs, np.abs(signal_ft))
+            plt.xlim(-(abs(w_d) + half_width), abs(w_d) + half_width)  # both peaks, +/-w_d
+            plt.axvline(omega_q if omega_q is not None else w_d, color='gray', linestyle='--',
+                        label=r'$\omega_q$')
+            plt.legend()
+            plt.xlabel('Angular frequency (arb. units)')
+            plt.ylabel('Magnitude')
+            plt.title(f'{self.__class__.__name__} frequency spectrum')
+            plt.grid()
+            plt.show()
+        return freqs, signal_ft
 
 
 class XGate(DrivePulse):
