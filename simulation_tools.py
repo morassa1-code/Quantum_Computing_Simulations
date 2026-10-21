@@ -337,3 +337,42 @@ class TransmonQubit:
 
         return t_vals, psi_traj
 
+
+class QubitEnsemble:
+    """
+    A collection of transmon qubits, each with its own frequency and anharmonicity.
+    Useful for simulating multi-qubit systems and their interactions.
+    """
+
+    def __init__(self, **kwargs):
+        self.qubits = [TransmonQubit(**params) for params in kwargs.get('qubits', [])]
+        self.couplings = kwargs.get('couplings', {})  # dict of {(i, j): g_ij} for qubit pairs
+        self.wave_function = None  # full wave function for the ensemble, set by coupled_wave_function()
+
+    def coupled_wave_function(self, states=None):
+        """
+        Product state of all qubits, |psi> = |psi_0> (x) |psi_1> (x) ... , built with
+        successive Kronecker products (qubit 0 is the leftmost factor).
+
+        states : list of 1D arrays, optional
+            One state vector per qubit. Defaults to each qubit's ground state.
+        Returns a vector of length prod(n_levels_i), also stored in self.wave_function.
+        """
+        if states is None:
+            states = [q.ground_state for q in self.qubits]
+        psi = np.array([1.0 + 0j])
+        for s in states:
+            psi = np.kron(psi, s)
+        self.wave_function = psi
+        return psi
+
+    # def apply_gate_to_all(self, pulse, psi0=None, t0=0.0):
+    #     """
+    #     Apply the same gate to all qubits in the ensemble.
+    #     Returns a list of (t_vals, psi_traj) for each qubit.
+    #     """
+    #     results = []
+    #     for qubit in self.qubits:
+    #         t_vals, psi_traj = qubit.apply_gate(pulse, psi0=psi0, t0=t0)
+    #         results.append((t_vals, psi_traj))
+    #     return results
