@@ -15,6 +15,82 @@ def save_and_show(save_as=None, dpi=200):
     plt.show()
 
 
+def export_bloch_glb(x, y, z, name, max_points=400, tube_radius=0.015):
+    """
+    Save a Bloch-sphere path as a 3D model (.glb) in DATA_DIR: a translucent
+    unit sphere, x/y/z axes, the trajectory as a red tube, a green start
+    marker and a red end marker. In PowerPoint use Insert > 3D Models, then
+    drag to rotate it during the slide show. A .glb has no text, so label
+    the axes (|0>, |1>, |+>, ...) with text boxes on the slide.
+    """
+    import trimesh
+    from trimesh.visual.material import PBRMaterial
+
+    os.makedirs(DATA_DIR, exist_ok=True)
+    name = name if os.path.splitext(name)[1] else name + '.glb'
+
+    # glTF is Y-up: map Bloch (x, y, z) -> (x, z, -y) so that |0> points up
+    pts = np.column_stack([x, z, -np.asarray(y)])
+    pts = pts[np.linspace(0, len(pts) - 1, min(max_points, len(pts))).astype(int)]
+
+    def solid(mesh, rgba):
+        mesh.visual = trimesh.visual.TextureVisuals(material=PBRMaterial(
+            baseColorFactor=rgba, metallicFactor=0.0, roughnessFactor=0.8,
+            alphaMode='BLEND' if rgba[3] < 1.0 else 'OPAQUE', doubleSided=True))
+        return mesh
+
+    scene = trimesh.Scene()
+    scene.add_geometry(solid(trimesh.creation.icosphere(subdivisions=4, radius=1.0),
+                             [0.8, 0.8, 0.8, 0.25]), geom_name='sphere')
+    # axes in glTF coordinates (Y up): Bloch X, Bloch Y (-Z in glTF), Bloch Z (+Y in glTF)
+    axes = (('x', [1, 0, 0], [0.12, 0.35, 0.85, 1.0]),
+            ('y', [0, 0, -1], [0.10, 0.60, 0.25, 1.0]),
+            ('z', [0, 1, 0], [0.25, 0.25, 0.25, 1.0]))
+    for label, direction, rgba in axes:
+        direction = np.array(direction, dtype=float)
+        shaft = trimesh.creation.cylinder(radius=0.02,
+                                          segment=[-1.25 * direction, 1.25 * direction])
+        scene.add_geometry(solid(shaft, rgba), geom_name=f'axis_{label}')
+        tip = trimesh.creation.cone(radius=0.06, height=0.18,
+                                    transform=trimesh.geometry.align_vectors([0, 0, 1], direction))
+        tip.apply_translation(1.25 * direction)  # cone base at the axis end, pointing outward
+        scene.add_geometry(solid(tip, rgba), geom_name=f'arrow_{label}')
+        for sign in (1, -1):  # markers on the sphere at +-1, showing the poles
+            pole = trimesh.creation.icosphere(subdivisions=2, radius=0.04)
+            pole.apply_translation(sign * direction)
+            scene.add_geometry(solid(pole, rgba), geom_name=f'pole_{label}{"+" if sign > 0 else "-"}')
+    tube = trimesh.util.concatenate([
+        trimesh.creation.cylinder(radius=tube_radius, segment=[p0, p1], sections=8)
+        for p0, p1 in zip(pts[:-1], pts[1:]) if np.linalg.norm(p1 - p0) > 1e-9])
+    scene.add_geometry(solid(tube, [0.86, 0.08, 0.24, 1.0]), geom_name='trajectory')
+    for label, point, rgba in (('start', pts[0], [0.0, 0.6, 0.0, 1.0]),
+                               ('end', pts[-1], [0.9, 0.0, 0.0, 1.0])):
+        marker = trimesh.creation.icosphere(subdivisions=2, radius=0.05)
+        marker.apply_translation(point)
+        scene.add_geometry(solid(marker, rgba), geom_name=label)
+
+    path = os.path.join(DATA_DIR, name)
+    scene.export(path)
+    return path
+
+
+def save_bloch_gif(fig, bloch, name, n_frames=72, elev=25, fps=24):
+    """Save a GIF of the rendered qutip Bloch sphere turning once about Z, in DATA_DIR."""
+    from PIL import Image
+
+    os.makedirs(DATA_DIR, exist_ok=True)
+    name = name if os.path.splitext(name)[1] else name + '.gif'
+    frames = []
+    for azim in np.linspace(0, 360, n_frames, endpoint=False):
+        bloch.axes.view_init(elev=elev, azim=azim)
+        fig.canvas.draw()
+        frames.append(Image.fromarray(np.asarray(fig.canvas.buffer_rgba())).convert('RGB'))
+    path = os.path.join(DATA_DIR, name)
+    frames[0].save(path, save_all=True, append_images=frames[1:],
+                   duration=int(1000 / fps), loop=0)
+    return path
+
+
 class DrivePulse:
     """
     Resonant microwave drive pulse implementing a single-qubit rotation on a
@@ -117,7 +193,8 @@ class DrivePulse:
         plt.grid()
         save_and_show(save_as)
 
-    def plot_bloch_trajectory(self, qubit, psi0=None, t0=0.0, frame='lab', save_as=None):
+    def plot_bloch_trajectory(self, qubit, psi0=None, t0=0.0, frame='lab', save_as=None,
+                              save_3d=None, save_gif=None):
         """
         Simulate this pulse acting on `qubit` and plot the state's path on
         the Bloch sphere, projected onto the |0>,|1> subspace (any
@@ -140,6 +217,11 @@ class DrivePulse:
 
         save_as : str, optional
             File name to save the figure under in the data folder.
+        save_3d : str, optional
+            File name (.glb) for an interactive 3D model of the sphere and
+            trajectory, for PowerPoint's Insert > 3D Models.
+        save_gif : str, optional
+            File name (.gif) for an animation of the sphere turning about Z.
         """
         t_vals, psi_traj = qubit.apply_gate(self, psi0=psi0, t0=t0)
 
@@ -188,6 +270,11 @@ class DrivePulse:
         b.render()
         fig.suptitle(f'{self.__class__.__name__} (angle={self.angle:.3f}) on Bloch sphere '
                      f'[{frame_label}]\n(green: initial, red: final)')
+        if save_3d:
+            export_bloch_glb(bloch_x, bloch_y, bloch_z, save_3d)
+        if save_gif:
+            save_bloch_gif(fig, b, save_gif)
+            b.axes.view_init(elev=30, azim=-60)  # qutip's default view for the still image
         save_and_show(save_as)
 
         return bloch_x, bloch_y, bloch_z
