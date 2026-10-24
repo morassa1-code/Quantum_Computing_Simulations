@@ -49,7 +49,6 @@ class DrivePulse:
         self.drag_coeff = drag_coeff
         self.total_modulated_signal = None  # set by generate_drive_signal(): Omega(t)*cos(w_d t + phase)
         self.deriviate_modulated_signal = None  # envelope derivative used for DRAG
-        self.drag_alpha = None  # qubit anharmonicity, set by DRAG_scheme()
   
     @property
     def envelope_duration(self):
@@ -73,30 +72,30 @@ class DrivePulse:
         return np.arange(t0 - self.n_sigma * self.sigma,
                           t0 + self.n_sigma * self.sigma + dt, dt)
 
-    def generate_drive_signal(self, omega_q, t0=0.0):
-        """Lab-frame signal Omega(t)*cos(w_d t + phase) to add to (a + a_dag)."""
+    def generate_drive_signal(self, omega_q, t0=0.0, alpha=None):
+        """
+        Lab-frame signal Omega(t)*cos(w_d t + phase) to add to (a + a_dag).
+        If drag_coeff != 0, the DRAG quadrature is added too, which needs the
+        qubit anharmonicity alpha.
+        """
+        if self.drag_coeff != 0.0 and alpha is None:
+            raise ValueError("DRAG needs the qubit anharmonicity: pass alpha")
         t = self.time_array(t0)
         w_d = self.drive_frequency if self.drive_frequency is not None else omega_q
         env = self.envelope(t, t0)
         theta = w_d * t + self.phase
         signal = env * np.cos(theta)
-        if self.drag_coeff != 0.0 and self.drag_alpha is not None:
-            # DRAG: quadrature Omega_y = -(lambda/alpha) * dOmega/dt, 90 deg out of phase
+        if self.drag_coeff != 0.0:
+            # DRAG: quadrature Omega_y = -(lambda/alpha) * dOmega/dt, 90 deg out of phase (deriviate)
             dt = 1.0 / self.sample_rate
             self.deriviate_modulated_signal = np.gradient(env, dt)
-            omega_y = -(self.drag_coeff / self.drag_alpha) * self.deriviate_modulated_signal
+            omega_y = -(self.drag_coeff / alpha) * self.deriviate_modulated_signal
             signal = signal + omega_y * np.sin(theta)  # lab-frame sign for H = Omega(t)(a + a_dag)
         self.total_modulated_signal = signal
         return t, self.total_modulated_signal
 
-    def DRAG_scheme(self, omega_q, alpha, t0=0.0):
-        """Enable DRAG for this pulse (needs the qubit anharmonicity alpha) and regenerate the signal."""
-        self.drag_alpha = alpha
-        return self.generate_drive_signal(omega_q, t0)
-
-
-    def plot(self, omega_q, t0=0.0):
-        t, signal = self.generate_drive_signal(omega_q, t0)
+    def plot(self, omega_q, t0=0.0, alpha=None):
+        t, signal = self.generate_drive_signal(omega_q, t0, alpha)
         plt.plot(t, self.envelope(t, t0), 'k--', label='envelope')
         plt.plot(t, signal, label='drive')
         plt.xlabel('Time (arb. units)')
@@ -191,13 +190,10 @@ class DrivePulse:
         n_fft : int, optional
             The number of points to use in the FFT. Default is 2**15 for zero padding.
         """
-        if self.drag_coeff != 0.0:
-            self.DRAG_scheme(omega_q, alpha)
         if self.total_modulated_signal is None:
-            raise ValueError("Call generate_drive_signal() before frequency_spectrum()")
-        # _, signal = self.generate_drive_signal(omega_q)
+            self.generate_drive_signal(omega_q, alpha=alpha)
+        
         signal_ft = np.fft.fftshift(np.fft.fft(self.total_modulated_signal, n=n_fft))
-        # angular frequency, same units as omega_q
         freqs = 2 * np.pi * np.fft.fftshift(
             np.fft.fftfreq(n_fft, d=1.0 / self.sample_rate))
         if plot:
@@ -308,10 +304,7 @@ class TransmonQubit:
         elif not isinstance(psi0, qt.Qobj):
             psi0 = qt.Qobj(np.asarray(psi0, dtype=complex).reshape(-1, 1))
 
-        if pulse.drag_coeff != 0.0:
-            pulse.DRAG_scheme(self.omega_q, self.alpha, t0)
-        else:
-            pulse.generate_drive_signal(self.omega_q, t0)
+        pulse.generate_drive_signal(self.omega_q, t0, self.alpha)
         t_vals = pulse.time_array(t0)
 
         H = [self.H0, [self.a + self.a_dag, pulse.total_modulated_signal]]
