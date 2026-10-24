@@ -1,6 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.linalg import expm
+import qutip as qt
 
 
 class DrivePulse:
@@ -129,63 +129,51 @@ class DrivePulse:
         """
         t_vals, psi_traj = qubit.apply_gate(self, psi0=psi0, t0=t0)
 
-        c0, c1 = psi_traj[:, 0], psi_traj[:, 1]
         w_d = self.drive_frequency if self.drive_frequency is not None else qubit.omega_q
-        if frame == 'rotating':
-            c1 = c1 * np.exp(1j * w_d * t_vals)
-        elif frame != 'lab':
+        if frame not in ('lab', 'rotating'):
             raise ValueError("frame must be 'lab' or 'rotating'")
 
-        norm = np.sqrt(np.abs(c0) ** 2 + np.abs(c1) ** 2)
-        c0, c1 = c0 / norm, c1 / norm
+        # Pauli operators on the |0>,|1> subspace of the full n_levels space
+        n = qubit.n_levels
+        sx = qt.projection(n, 0, 1) + qt.projection(n, 1, 0)
+        sy = -1j * qt.projection(n, 0, 1) + 1j * qt.projection(n, 1, 0)
+        sz = qt.projection(n, 0, 0) - qt.projection(n, 1, 1)
+        p01 = qt.projection(n, 0, 0) + qt.projection(n, 1, 1)
 
-        bloch_x = 2 * np.real(np.conj(c0) * c1)
-        bloch_y = 2 * np.imag(np.conj(c0) * c1)
-        bloch_z = np.abs(c0) ** 2 - np.abs(c1) ** 2
+        states = [qt.Qobj(row.reshape(-1, 1)) for row in psi_traj]
+        # dividing by <P01> renormalizes the projection onto the qubit subspace
+        # (population leaked to |2>, ... is discarded)
+        pop = np.real(qt.expect(p01, states))
+        bloch_x = np.real(qt.expect(sx, states)) / pop
+        bloch_y = np.real(qt.expect(sy, states)) / pop
+        bloch_z = np.real(qt.expect(sz, states)) / pop
 
-        fig = plt.figure(figsize=(6, 6))
-        ax = fig.add_subplot(111, projection='3d')
+        if frame == 'rotating':
+            # undo the free precession: multiply the |1> amplitude by exp(i w_d t),
+            # i.e. rotate (x, y) about Z by w_d t
+            phi = w_d * t_vals
+            bloch_x, bloch_y = (bloch_x * np.cos(phi) - bloch_y * np.sin(phi),
+                                bloch_x * np.sin(phi) + bloch_y * np.cos(phi))
 
-        # flat, matte sphere: a single smooth surface, no latitude/longitude grid
-        u, v = np.mgrid[0:2 * np.pi:60j, 0:np.pi:30j]
-        ax.plot_surface(np.cos(u) * np.sin(v), np.sin(u) * np.sin(v), np.cos(v),
-                         color='lightgray', alpha=0.25, linewidth=0,
-                         edgecolor='none', shade=False, antialiased=True)
-
-        # x/y/z axes through the sphere, labeled by their Bloch eigenstates
-        axis_len = 1.3
-        for dx, dy, dz in [(1, 0, 0), (0, 1, 0), (0, 0, 1)]:
-            ax.plot([-axis_len * dx, axis_len * dx],
-                    [-axis_len * dy, axis_len * dy],
-                    [-axis_len * dz, axis_len * dz],
-                    color='gray', linewidth=0.8)
-
-        label_pos = 1.4
-        ax.text(0, 0, label_pos, r'$|0\rangle$ (+Z)', ha='center')
-        ax.text(0, 0, -label_pos, r'$|1\rangle$ (-Z)', ha='center')
-        ax.text(label_pos, 0, 0, r'$|+\rangle$ (+X)', ha='center')
-        ax.text(-label_pos, 0, 0, r'$|-\rangle$ (-X)', ha='center')
-        ax.text(0, label_pos, 0, r'$|{+i}\rangle$ (+Y)', ha='center')
-        ax.text(0, -label_pos, 0, r'$|{-i}\rangle$ (-Y)', ha='center')
-
-        ax.plot(bloch_x, bloch_y, bloch_z, color='crimson', linewidth=2)
-        ax.scatter(bloch_x[0], bloch_y[0], bloch_z[0], color='g', s=60, label='initial')
-        ax.scatter(bloch_x[-1], bloch_y[-1], bloch_z[-1], color='r', s=60, label='final')
-
-        ax.set_box_aspect([1, 1, 1])
-        ax.set_xlim(-label_pos, label_pos)
-        ax.set_ylim(-label_pos, label_pos)
-        ax.set_zlim(-label_pos, label_pos)
-        ax.set_axis_off()
         if frame == 'lab':
             frame_label = 'lab frame'
         elif w_d == qubit.omega_q:
             frame_label = 'Heisenberg frame'
         else:
             frame_label = 'rotating frame (drive)'
-        ax.set_title(f'{self.__class__.__name__} (angle={self.angle:.3f}) on Bloch sphere '
-                     f'[{frame_label}]')
-        ax.legend()
+
+        fig = plt.figure(figsize=(6, 6))
+        b = qt.Bloch(fig=fig)
+        b.xlabel = [r'$|+\rangle$', r'$|-\rangle$']
+        b.ylabel = [r'$|{+i}\rangle$', r'$|{-i}\rangle$']
+        b.zlabel = [r'$|0\rangle$', r'$|1\rangle$']
+        b.point_size = [4, 60, 60]  # trajectory, initial, final
+        b.add_points([bloch_x, bloch_y, bloch_z], meth='l', colors=['crimson'])
+        b.add_points([[bloch_x[0]], [bloch_y[0]], [bloch_z[0]]], colors=['g'])
+        b.add_points([[bloch_x[-1]], [bloch_y[-1]], [bloch_z[-1]]], colors=['r'])
+        b.render()
+        fig.suptitle(f'{self.__class__.__name__} (angle={self.angle:.3f}) on Bloch sphere '
+                     f'[{frame_label}]\n(green: initial, red: final)')
         plt.show()
 
         return bloch_x, bloch_y, bloch_z
@@ -285,29 +273,30 @@ class TransmonQubit:
 
     @property
     def H0(self):
-        return np.diag(self.energies).astype(complex)
+        return qt.Qobj(np.diag(self.energies))
 
     @property
     def a(self):
-        return np.diag(np.sqrt(np.arange(1, self.n_levels)), k=1).astype(complex)
+        return qt.destroy(self.n_levels)
 
     @property
     def a_dag(self):
-        return self.a.conj().T
+        return self.a.dag()
 
     @property
     def ground_state(self):
-        psi0 = np.zeros(self.n_levels, dtype=complex)
-        psi0[0] = 1.0
-        return psi0
+        return qt.basis(self.n_levels, 0)
 
     def apply_gate(self, pulse, psi0=None, t0=0.0):
         """
-        Propagate a state through a drive pulse by direct time integration
-        of the full lab-frame Hamiltonian H0 + Omega(t)*cos(w_d t+phase)*(a+a_dag)
+        Propagate a state through a drive pulse with qutip.sesolve on the
+        full lab-frame Hamiltonian H0 + Omega(t)*cos(w_d t+phase)*(a+a_dag)
         - no RWA, no 2-level truncation, so leakage out of the qubit
-        subspace (into |2>, etc.) shows up naturally. Step size is set by
-        the pulse's own sample_rate.
+        subspace (into |2>, etc.) shows up naturally. The drive is passed
+        to qutip as an array sampled on the pulse's own time grid (set by
+        its sample_rate).
+
+        psi0 may be a qutip ket or a plain vector (default: ground state).
 
         Returns the time grid and the full complex state at every step
         (shape (len(t_vals), n_levels)), so callers can get populations
@@ -316,24 +305,19 @@ class TransmonQubit:
         """
         if psi0 is None:
             psi0 = self.ground_state
+        elif not isinstance(psi0, qt.Qobj):
+            psi0 = qt.Qobj(np.asarray(psi0, dtype=complex).reshape(-1, 1))
 
         if pulse.drag_coeff != 0.0:
             pulse.DRAG_scheme(self.omega_q, self.alpha, t0)
         else:
             pulse.generate_drive_signal(self.omega_q, t0)
         t_vals = pulse.time_array(t0)
-        dt = t_vals[1] - t_vals[0]
-        w_d = pulse.drive_frequency if pulse.drive_frequency is not None else self.omega_q
-        drive_op = self.a + self.a_dag
 
-        psi_traj = np.empty((len(t_vals), self.n_levels), dtype=complex)
-        psi_traj[0] = psi0
+        H = [self.H0, [self.a + self.a_dag, pulse.total_modulated_signal]]
+        result = qt.sesolve(H, psi0, t_vals,
+                            options={'store_states': True, 'nsteps': 100000})
 
-        for i in range(len(t_vals) - 1):
-            t = t_vals[i]
-            Om = pulse.total_modulated_signal[i]  # Omega(t) at this time
-            H = self.H0 + Om * drive_op
-            psi_traj[i + 1] = expm(-1j * H * dt / self.hbar) @ psi_traj[i]
-
+        psi_traj = np.array([state.full().ravel() for state in result.states])
         return t_vals, psi_traj
 
