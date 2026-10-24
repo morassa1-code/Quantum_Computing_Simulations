@@ -99,6 +99,21 @@ Square envelope:
 \end{align}
 
 %------------------------------------------------------------------
+\section*{Virtual Z gate}
+\begin{align}
+  H_Z &= \frac{\sigma_z}{2}, \qquad \ket{\psi(\tau)} = e^{-\ii\tau\sigma_z/2}\ket{\psi_0},
+  \qquad \tau \in [0, \theta] \\
+  U_Z(\theta) &= e^{-\ii\theta\sigma_z/2}
+     = \begin{pmatrix} e^{-\ii\theta/2} & 0 \\ 0 & e^{\ii\theta/2} \end{pmatrix} \\
+  \ket{\psi_0} &= \ket{+} = \frac{\ket{0} + \ket{1}}{\sqrt{2}} \\
+  \begin{pmatrix} x(\tau) \\ y(\tau) \end{pmatrix}
+    &= \begin{pmatrix} \cos\tau & -\sin\tau \\ \sin\tau & \cos\tau \end{pmatrix}
+       \begin{pmatrix} x_0 \\ y_0 \end{pmatrix}, \qquad z(\tau) = z_0 \\
+  \bm{r}_{\ket{+}}(\tau) &= \big(\cos\tau,\; \sin\tau,\; 0\big) \\
+  \varphi_k &\to \varphi_k + \theta \quad \text{for every later pulse } k
+\end{align}
+
+%------------------------------------------------------------------
 \section*{Bloch vector (qubit subspace)}
 \begin{align}
   \sigma_x &= \ket{0}\!\bra{1} + \ket{1}\!\bra{0}, \quad
