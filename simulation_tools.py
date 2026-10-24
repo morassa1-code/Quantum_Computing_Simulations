@@ -347,6 +347,50 @@ class ZGate:
         pulse.phase += self.angle
         return pulse
 
+    def plot_bloch_trajectory(self, psi0=None, n_points=200, save_as=None,
+                              save_3d=None, save_gif=None):
+        """
+        Plot the virtual Z gate on the Bloch sphere. There is no pulse and
+        no duration: the gate is a frame change by `angle` about Z (the
+        phase added to later X/Y pulses in apply_to), so the trajectory is
+        the rotation exp(-i*angle*sigma_z/2), obtained by evolving psi0
+        under H = sigma_z/2 for a "time" equal to the angle.
+
+        psi0 : qutip ket, optional
+            Initial qubit state. Default is |+>, since the ground state
+            sits on the Z axis and would not move.
+        save_as, save_3d, save_gif : str, optional
+            File names (in the data folder) for the still image, the 3D
+            model (.glb) and the rotating GIF, as in DrivePulse.
+        """
+        if psi0 is None:
+            psi0 = (qt.basis(2, 0) + qt.basis(2, 1)).unit() # |+> state
+        tlist = np.linspace(0.0, self.angle, n_points)
+        result = qt.sesolve(qt.sigmaz() / 2, psi0, tlist,
+                            e_ops=[qt.sigmax(), qt.sigmay(), qt.sigmaz()])
+        bloch_x, bloch_y, bloch_z = (np.real(e) for e in result.expect)
+
+        fig = plt.figure(figsize=(6, 6))
+        b = qt.Bloch(fig=fig)
+        b.xlabel = [r'$|+\rangle$', r'$|-\rangle$']
+        b.ylabel = [r'$|{+i}\rangle$', r'$|{-i}\rangle$']
+        b.zlabel = [r'$|0\rangle$', r'$|1\rangle$']
+        b.point_size = [4, 60, 60]  # trajectory, initial, final
+        b.add_points([bloch_x, bloch_y, bloch_z], meth='l', colors=['crimson'])
+        b.add_points([[bloch_x[0]], [bloch_y[0]], [bloch_z[0]]], colors=['g'])
+        b.add_points([[bloch_x[-1]], [bloch_y[-1]], [bloch_z[-1]]], colors=['r'])
+        b.render()
+        fig.suptitle(f'ZGate (angle={self.angle:.3f}) on Bloch sphere [virtual Z]\n'
+                     '(green: initial, red: final)')
+        if save_3d:
+            export_bloch_glb(bloch_x, bloch_y, bloch_z, save_3d)
+        if save_gif:
+            save_bloch_gif(fig, b, save_gif)
+            b.axes.view_init(elev=30, azim=-60)  # qutip's default view for the still image
+        save_and_show(save_as)
+
+        return bloch_x, bloch_y, bloch_z
+
 
 class TransmonQubit:
     """
