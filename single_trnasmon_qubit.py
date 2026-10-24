@@ -6,7 +6,8 @@ if __name__ == "__main__":
     # x_gate.plot_bloch_trajectory(q, frame='rotating')
     # x_gate.frequency_spectrum(omega_q=q.omega_q, alpha=q.alpha, n_fft=2**20)
     y_gate = YGate(np.pi/2, drive_frequency=q.omega_q, drag_coeff=0.5)
-    y_gate.plot_bloch_trajectory(q, frame='rotating')
-    y_gate.frequency_spectrum(omega_q=q.omega_q, alpha=q.alpha, n_fft=2**20)
+    y_gate.plot(q.omega_q, alpha=q.alpha, save_as='y_gate_pulse')
+    y_gate.plot_bloch_trajectory(q, frame='rotating', save_as='bloch_trajectory')
+    y_gate.frequency_spectrum(omega_q=q.omega_q, alpha=q.alpha, n_fft=2**20, save_as='frequency_spectrum')
     # ZGate(np.pi/2).plot_bloch_trajectory(q)
 

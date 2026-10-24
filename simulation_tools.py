@@ -1,6 +1,18 @@
+import os
 import numpy as np
 import matplotlib.pyplot as plt
 import qutip as qt
+
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
+
+
+def save_and_show(save_as=None, dpi=200):
+    """Save the current figure to DATA_DIR/save_as (.png if no extension), then show it."""
+    if save_as:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        name = save_as if os.path.splitext(save_as)[1] else save_as + '.png'
+        plt.savefig(os.path.join(DATA_DIR, name), dpi=dpi, bbox_inches='tight')
+    plt.show()
 
 
 class DrivePulse:
@@ -94,7 +106,7 @@ class DrivePulse:
         self.total_modulated_signal = signal
         return t, self.total_modulated_signal
 
-    def plot(self, omega_q, t0=0.0, alpha=None):
+    def plot(self, omega_q, t0=0.0, alpha=None, save_as=None):
         t, signal = self.generate_drive_signal(omega_q, t0, alpha)
         plt.plot(t, self.envelope(t, t0), 'k--', label='envelope')
         plt.plot(t, signal, label='drive')
@@ -103,9 +115,9 @@ class DrivePulse:
         plt.title(f'{self.__class__.__name__} (angle={self.angle:.3f})')
         plt.legend()
         plt.grid()
-        plt.show()
+        save_and_show(save_as)
 
-    def plot_bloch_trajectory(self, qubit, psi0=None, t0=0.0, frame='lab'):
+    def plot_bloch_trajectory(self, qubit, psi0=None, t0=0.0, frame='lab', save_as=None):
         """
         Simulate this pulse acting on `qubit` and plot the state's path on
         the Bloch sphere, projected onto the |0>,|1> subspace (any
@@ -125,6 +137,9 @@ class DrivePulse:
             read out Rabi oscillations experimentally. When w_d ==
             qubit.omega_q (resonant drive, the default), this is the frame
             in which H0 is exactly cancelled, labeled the Heisenberg frame.
+
+        save_as : str, optional
+            File name to save the figure under in the data folder.
         """
         t_vals, psi_traj = qubit.apply_gate(self, psi0=psi0, t0=t0)
 
@@ -173,11 +188,12 @@ class DrivePulse:
         b.render()
         fig.suptitle(f'{self.__class__.__name__} (angle={self.angle:.3f}) on Bloch sphere '
                      f'[{frame_label}]\n(green: initial, red: final)')
-        plt.show()
+        save_and_show(save_as)
 
         return bloch_x, bloch_y, bloch_z
 
-    def frequency_spectrum(self, omega_q=None, alpha=None, plot=True, n_fft=2**17):
+    def frequency_spectrum(self, omega_q=None, alpha=None, plot=True, n_fft=2**17,
+                           save_as=None):
         """
         Compute the Fourier transform of the drive signal, centered on the drive frequency (or the qubit frequency if drive_frequency is None).
         Returns the angular frequencies and the corresponding Fourier transform of the signal.
@@ -189,6 +205,8 @@ class DrivePulse:
             If True, plots the magnitude of the Fourier transform around the drive frequency.
         n_fft : int, optional
             The number of points to use in the FFT. Default is 2**15 for zero padding.
+        save_as : str, optional
+            File name to save the plot under in the data folder (needs plot=True).
         """
         if self.total_modulated_signal is None:
             self.generate_drive_signal(omega_q, alpha=alpha)
@@ -211,7 +229,7 @@ class DrivePulse:
             plt.ylabel('Magnitude')
             plt.title(f'{self.__class__.__name__} frequency spectrum')
             plt.grid()
-            plt.show()
+            save_and_show(save_as)
         return freqs, signal_ft
 
 
