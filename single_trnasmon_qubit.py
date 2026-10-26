@@ -7,15 +7,9 @@ if __name__ == "__main__":
 
     rabi = RabiDrive(omega_rabi=0.1, duration=200, drive_frequency=q.omega_q)
     t_vals, psi_traj = q.apply_gate(rabi)
-    q.plot_populations(t_vals, psi_traj, save_as='rabi')
+    fit = q.fit_rabi(t_vals, psi_traj, drive=rabi)
+    q.plot_populations(t_vals, psi_traj, fit=fit, save_as='rabi')
 
-
-
-
-
-
-
-    # populations = q.populations(psi_traj, t_vals)
 
     # x_gate.plot(q.omega_q, alpha=q.alpha, save_as='x_gate_pulse')
     # x_gate.plot_bloch_trajectory(q, frame='lab', save_as='bloch_trajectory', save_3d='bloch_trajectory.glb', save_gif='bloch_trajectory.gif')

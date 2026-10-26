@@ -5,6 +5,7 @@ from matplotlib.figure import Figure
 import numpy as np
 import matplotlib.pyplot as plt
 import qutip as qt
+from scipy.optimize import curve_fit
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
 
@@ -472,26 +473,6 @@ class TransmonQubit:
                             options={'store_states': True, 'nsteps': 100000})
         psi_traj = np.array([state.full().ravel() for state in result.states])
         return t_vals, psi_traj
-    
-
-    # def rabi_oscillation(self, omega_rabi, duration, drive_frequency=None, psi0=None,
-    #                  sample_rate=50.0):
-    #     """
-    #     Drive continuously with a constant-amplitude resonant field
-    #     omega_rabi*cos(w_d t)*(a + a_dag) for `duration`, to watch the
-    #     populations oscillate in time (full lab-frame Hamiltonian, so leakage
-    #     into |2> shows up). Keep omega_rabi << |alpha|.
-    #     """
-    #     w_d = self.omega_q if drive_frequency is None else drive_frequency
-    #     if psi0 is None:
-    #         psi0 = self.ground_state
-    #     t_vals = np.arange(0, duration, 1.0 / sample_rate)
-    #     drive = omega_rabi * np.cos(w_d * t_vals)
-    #     H = [self.H0, [self.a + self.a_dag, drive]]
-    #     result = qt.sesolve(H, psi0, t_vals,
-    #                         options={'store_states': True, 'nsteps': 100000})
-    #     psi_traj = np.array([state.full().ravel() for state in result.states])
-    #     return t_vals, psi_traj
 
 
     def populations(self, psi_traj):
@@ -500,11 +481,50 @@ class TransmonQubit:
             raise TypeError("psi_traj must be a numpy array")
         return np.abs(psi_traj)**2
 
-    def plot_populations(self, t_vals, psi_traj, save_as=None):
-        """Plot the probability of each level |0>, |1>, ... against time."""
+
+    def fit_rabi(self, t_vals, psi_traj, drive=None, level=1, n_fft=2**15):
+        """
+        Fit the population of `level` to the two-level Rabi formula
+
+            P(t) = (A/2) * (1 - cos(w * (t - t_vals[0])))
+
+        where A is the maximum population and w the oscillation frequency
+        (generalized Rabi frequency sqrt(Omega^2 + Delta^2)). If `drive` is a
+        RabiDrive, the fit is compared with the theory A = Omega^2/(Omega^2 +
+        Delta^2), w = sqrt(Omega^2 + Delta^2). Prints the comparison and
+        returns a dict (max_pop, omega_eff, fit, and the theory values).
+        """
+        tau = np.asarray(t_vals) - t_vals[0]
+        pop = self.populations(psi_traj)[:, level]
+        dt = tau[1] - tau[0]
+
+        # initial guess: dominant frequency of the population (FFT peak)
+        spectrum = np.abs(np.fft.rfft(pop - pop.mean(), n=n_fft))
+        w0 = 2 * np.pi * np.fft.rfftfreq(n_fft, dt)[np.argmax(spectrum)]
+
+        def model(t, A, w, B):
+            return 0.5 * A * (1 - np.cos(w * t)) + B
+
+        (A, w, B), _ = curve_fit(model, tau, pop, p0=[pop.max(), w0, pop.mean()])
+        result = {'max_pop': pop.max(), 'A_fit': A, 'omega_eff': abs(w),
+                  'fit': model(tau, A, w, B)}
+
+        print(f'|{level}> population: max = {pop.max():.4f}, fit amplitude = {A:.4f}, '
+              f'fit omega = {abs(w):.5f}')
+        if drive is not None:
+            A_th, w_th = drive.expected_rabi(self.omega_q)
+            result.update(max_pop_theory=A_th, omega_eff_theory=w_th)
+            print(f'theory:        max = {A_th:.4f}, omega = {w_th:.5f}  '
+                  f'(errors: {abs(A - A_th) / A_th:.1%}, {abs(abs(w) - w_th) / w_th:.1%})')
+        return result
+
+    def plot_populations(self, t_vals, psi_traj, fit=None, save_as=None):
+        """Plot the probability of each level |0>, |1>, ... against time (fit: dict from fit_rabi)."""
         populations = self.populations(psi_traj)
         for n in range(populations.shape[1]):
             plt.plot(t_vals, populations[:, n], label=f'|{n}>')
+        if fit is not None:
+            plt.plot(t_vals, fit['fit'], 'k--', label='Rabi fit')
         plt.xlabel('Time (arb. units)')
         plt.ylabel('Population')
         plt.title('Rabi oscillations')
@@ -536,5 +556,13 @@ class RabiDrive(DrivePulse):
 
 
     def detuning(self, omega_q):
-            """Return the detuning of a drive from the qubit's 0<->1 transition."""
-            return self.omega_rabi - omega_q
+        """Return the detuning of the drive carrier from the qubit's 0<->1 transition."""
+        if self.drive_frequency is None:
+            return 0.0
+        return self.drive_frequency - omega_q
+
+    def expected_rabi(self, omega_q):
+        """Two-level RWA theory: (max population, oscillation frequency)."""
+        delta = self.detuning(omega_q)
+        w = np.hypot(self.omega_rabi, delta)
+        return self.omega_rabi**2 / w**2, w
