@@ -2,7 +2,9 @@ from simulation_tools import *
 
 if __name__ == "__main__":
     q = TransmonQubit(omega_q=2.0, alpha=-0.3, n_levels=3)
-    # x_gate = XGate(np.pi, drive_frequency=q.omega_q, drag_coeff=0.5, sample_rate=1e3)
+    x_gate = XGate(np.pi, drive_frequency=q.omega_q, drag_coeff=0.5, sample_rate=1e3)
+    t_vals, psi_traj = q.apply_gate(x_gate)
+    populations = q.populations(psi_traj, t_vals)
     # x_gate.plot(q.omega_q, alpha=q.alpha, save_as='x_gate_pulse')
     # x_gate.plot_bloch_trajectory(q, frame='lab', save_as='bloch_trajectory', save_3d='bloch_trajectory.glb', save_gif='bloch_trajectory.gif')
     # x_gate.frequency_spectrum(omega_q=q.omega_q, alpha=q.alpha, n_fft=2**20, save_as='frequency_spectrum')

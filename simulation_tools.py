@@ -1,4 +1,7 @@
 import os
+from matplotlib import lines
+from matplotlib.axis import Axis
+from matplotlib.figure import Figure
 import numpy as np
 import matplotlib.pyplot as plt
 import qutip as qt
@@ -462,4 +465,23 @@ class TransmonQubit:
 
         psi_traj = np.array([state.full().ravel() for state in result.states])
         return t_vals, psi_traj
+
+    def populations(self, psi_traj, t_axis=None):
+        """See population evolution in the qubit subspace (|0>, |1>) and leakage into |2>, |3>, ..."""
+        if not isinstance(psi_traj, np.ndarray):
+            raise TypeError("psi_traj must be a numpy array")
+        if t_axis is not None and len(t_axis) != psi_traj.shape[0]:
+            raise ValueError("t_axis length must match the number of time steps in psi_traj")
+        if t_axis is None:
+            t_axis = np.arange(psi_traj.shape[0])
+
+        populations = np.abs(psi_traj)**2
+        for n in range(populations.shape[1]):
+            plt.plot(t_axis, populations[:, n], label=f'|{n}>')
+        plt.xlabel('Time (arb. units)')
+        plt.ylabel('Population')
+        plt.title('Level populations vs time')
+        plt.legend()
+        plt.grid()
+        return populations
 
