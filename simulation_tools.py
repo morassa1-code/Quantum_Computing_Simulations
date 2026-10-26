@@ -6,6 +6,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import qutip as qt
 from scipy.optimize import curve_fit
+import trimesh
+from trimesh.visual.material import PBRMaterial
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
 
@@ -37,8 +39,6 @@ def export_bloch_glb(x, y, z, name, max_points=400, tube_radius=0.015):
     drag to rotate it during the slide show. A .glb has no text, so label
     the axes (|0>, |1>, |+>, ...) with text boxes on the slide.
     """
-    import trimesh
-    from trimesh.visual.material import PBRMaterial
 
     os.makedirs(DATA_DIR, exist_ok=True)
     name = name if os.path.splitext(name)[1] else name + '.glb'
@@ -151,6 +151,8 @@ class DrivePulse:
         self.drag_coeff = drag_coeff
         self.total_modulated_signal = None  # set by generate_drive_signal(): Omega(t)*cos(w_d t + phase)
         self.deriviate_modulated_signal = None  # envelope derivative used for DRAG
+        self.complex_envelope = None  # set by generate_drive_signal(): Omega_x - i*Omega_y, used by the RWA
+        self.drive_phase = None  # set by generate_drive_signal(): w_d*t + phase
   
     @property
     def envelope_duration(self):
@@ -174,7 +176,7 @@ class DrivePulse:
         return np.arange(t0 - self.n_sigma * self.sigma,
                           t0 + self.n_sigma * self.sigma + dt, dt)
 
-    def generate_drive_signal(self, omega_q, t0=0.0, alpha=None, use_envelope=True):
+    def generate_drive_signal(self, omega_q, t0=0.0, alpha=None, use_envelope=True, rwa=False):
         """
         Lab-frame signal Omega(t)*cos(w_d t + phase) to add to (a + a_dag).
         If drag_coeff != 0, the DRAG quadrature is added too, which needs the
@@ -189,7 +191,9 @@ class DrivePulse:
             env = self.envelope(t, t0)
             signal = env * np.cos(theta)
         else:
+            env = np.ones_like(t)
             signal = np.cos(theta)
+        omega_y = np.zeros_like(t)
         if self.drag_coeff != 0.0:
             # DRAG: quadrature Omega_y = -(lambda/alpha) * dOmega/dt, 90 deg out of phase (deriviate)
             dt = 1.0 / self.sample_rate
@@ -197,6 +201,10 @@ class DrivePulse:
             omega_y = -(self.drag_coeff / alpha) * self.deriviate_modulated_signal
             signal = signal + omega_y * np.sin(theta)  # lab-frame sign for H = Omega(t)(a + a_dag)
         self.total_modulated_signal = signal
+
+        # signal = Re[(Omega_x - i*Omega_y) * exp(i*theta)]
+        self.complex_envelope = env - 1j * omega_y
+        self.drive_phase = theta
         return t, self.total_modulated_signal
 
     def plot(self, omega_q, t0=0.0, alpha=None, save_as=None):
@@ -454,7 +462,7 @@ class TransmonQubit:
     def ground_state(self):
         return qt.basis(self.n_levels, 0)
 
-    def apply_gate(self, pulse, psi0=None, t0=0.0):
+    def apply_gate(self, pulse, psi0=None, t0=0.0, rwa=False):
         """
         Propagate a state through a drive pulse with qutip.sesolve on the
         full lab-frame Hamiltonian H0 + Omega(t)*cos(w_d t+phase)*(a+a_dag)
@@ -478,7 +486,14 @@ class TransmonQubit:
         pulse.generate_drive_signal(self.omega_q, t0, self.alpha)
         t_vals = pulse.time_array(t0)
 
-        H = [self.H0, [self.a + self.a_dag, pulse.total_modulated_signal]]
+        if rwa:
+            # keep only the co-rotating terms: (1/2) * (c* e^{-i theta} a_dag + c e^{i theta} a)
+            c, theta = pulse.complex_envelope, pulse.drive_phase
+            H = [self.H0,
+                 [self.a_dag, 0.5 * np.conj(c) * np.exp(-1j * theta)],
+                 [self.a,     0.5 * c * np.exp(1j * theta)]]
+        else:
+            H = [self.H0, [self.a + self.a_dag, pulse.total_modulated_signal]]
         result = qt.sesolve(H, psi0, t_vals,
                             options={'store_states': True, 'nsteps': 100000})
         psi_traj = np.array([state.full().ravel() for state in result.states])
