@@ -163,7 +163,7 @@ class DrivePulse:
         return np.arange(t0 - self.n_sigma * self.sigma,
                           t0 + self.n_sigma * self.sigma + dt, dt)
 
-    def generate_drive_signal(self, omega_q, t0=0.0, alpha=None):
+    def generate_drive_signal(self, omega_q, t0=0.0, alpha=None, use_envelope=True):
         """
         Lab-frame signal Omega(t)*cos(w_d t + phase) to add to (a + a_dag).
         If drag_coeff != 0, the DRAG quadrature is added too, which needs the
@@ -173,9 +173,12 @@ class DrivePulse:
             raise ValueError("DRAG needs the qubit anharmonicity: pass alpha")
         t = self.time_array(t0)
         w_d = self.drive_frequency if self.drive_frequency is not None else omega_q
-        env = self.envelope(t, t0)
         theta = w_d * t + self.phase
-        signal = env * np.cos(theta)
+        if use_envelope:
+            env = self.envelope(t, t0)
+            signal = env * np.cos(theta)
+        else:
+            signal = np.cos(theta)
         if self.drag_coeff != 0.0:
             # DRAG: quadrature Omega_y = -(lambda/alpha) * dOmega/dt, 90 deg out of phase (deriviate)
             dt = 1.0 / self.sample_rate
@@ -395,6 +398,11 @@ class ZGate:
         return bloch_x, bloch_y, bloch_z
 
 
+
+    
+
+
+
 class TransmonQubit:
     """
     Truncated (n_levels) transmon: a weakly anharmonic Josephson-junction
@@ -462,26 +470,46 @@ class TransmonQubit:
         H = [self.H0, [self.a + self.a_dag, pulse.total_modulated_signal]]
         result = qt.sesolve(H, psi0, t_vals,
                             options={'store_states': True, 'nsteps': 100000})
+        psi_traj = np.array([state.full().ravel() for state in result.states])
+        return t_vals, psi_traj
+    
 
+    def rabi_oscillation(self, omega_rabi, duration, drive_frequency=None, psi0=None,
+                     sample_rate=50.0):
+        """
+        Drive continuously with a constant-amplitude resonant field
+        omega_rabi*cos(w_d t)*(a + a_dag) for `duration`, to watch the
+        populations oscillate in time (full lab-frame Hamiltonian, so leakage
+        into |2> shows up). Keep omega_rabi << |alpha|.
+        """
+        w_d = self.omega_q if drive_frequency is None else drive_frequency
+        if psi0 is None:
+            psi0 = self.ground_state
+        t_vals = np.arange(0, duration, 1.0 / sample_rate)
+        drive = omega_rabi * np.cos(w_d * t_vals)
+        H = [self.H0, [self.a + self.a_dag, drive]]
+        result = qt.sesolve(H, psi0, t_vals,
+                            options={'store_states': True, 'nsteps': 100000})
         psi_traj = np.array([state.full().ravel() for state in result.states])
         return t_vals, psi_traj
 
-    def populations(self, psi_traj, t_axis=None):
-        """See population evolution in the qubit subspace (|0>, |1>) and leakage into |2>, |3>, ..."""
+    def populations(self, psi_traj):
+        """Population of each level at every time step (shape (n_steps, n_levels))."""
         if not isinstance(psi_traj, np.ndarray):
             raise TypeError("psi_traj must be a numpy array")
-        if t_axis is not None and len(t_axis) != psi_traj.shape[0]:
-            raise ValueError("t_axis length must match the number of time steps in psi_traj")
-        if t_axis is None:
-            t_axis = np.arange(psi_traj.shape[0])
+        return np.abs(psi_traj)**2
 
-        populations = np.abs(psi_traj)**2
+    def plot_populations(self, t_vals, psi_traj, save_as=None):
+        """Plot the probability of each level |0>, |1>, ... against time."""
+        populations = self.populations(psi_traj)
         for n in range(populations.shape[1]):
-            plt.plot(t_axis, populations[:, n], label=f'|{n}>')
+            plt.plot(t_vals, populations[:, n], label=f'|{n}>')
         plt.xlabel('Time (arb. units)')
         plt.ylabel('Population')
-        plt.title('Level populations vs time')
+        plt.title('Rabi oscillations')
         plt.legend()
         plt.grid()
-        return populations
+        save_and_show(save_as)
+
+
 
