@@ -4,8 +4,11 @@ if __name__ == "__main__":
     q = TransmonQubit(omega_q=2.0, alpha=-0.3, n_levels=3)
     # x_gate = XGate(np.pi, drive_frequency=q.omega_q, drag_coeff=0.5, sample_rate=1e3)
     # t_vals, psi_traj = q.apply_gate(x_gate)
-    t_vals, psi_traj = q.rabi_oscillation(omega_rabi=0.1, duration=400)
+
+    rabi = RabiDrive(omega_rabi=0.1, duration=200, drive_frequency=q.omega_q)
+    t_vals, psi_traj = q.apply_gate(rabi)
     q.plot_populations(t_vals, psi_traj, save_as='rabi')
+
 
 
 

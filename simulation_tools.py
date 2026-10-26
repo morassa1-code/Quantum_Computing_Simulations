@@ -474,24 +474,25 @@ class TransmonQubit:
         return t_vals, psi_traj
     
 
-    def rabi_oscillation(self, omega_rabi, duration, drive_frequency=None, psi0=None,
-                     sample_rate=50.0):
-        """
-        Drive continuously with a constant-amplitude resonant field
-        omega_rabi*cos(w_d t)*(a + a_dag) for `duration`, to watch the
-        populations oscillate in time (full lab-frame Hamiltonian, so leakage
-        into |2> shows up). Keep omega_rabi << |alpha|.
-        """
-        w_d = self.omega_q if drive_frequency is None else drive_frequency
-        if psi0 is None:
-            psi0 = self.ground_state
-        t_vals = np.arange(0, duration, 1.0 / sample_rate)
-        drive = omega_rabi * np.cos(w_d * t_vals)
-        H = [self.H0, [self.a + self.a_dag, drive]]
-        result = qt.sesolve(H, psi0, t_vals,
-                            options={'store_states': True, 'nsteps': 100000})
-        psi_traj = np.array([state.full().ravel() for state in result.states])
-        return t_vals, psi_traj
+    # def rabi_oscillation(self, omega_rabi, duration, drive_frequency=None, psi0=None,
+    #                  sample_rate=50.0):
+    #     """
+    #     Drive continuously with a constant-amplitude resonant field
+    #     omega_rabi*cos(w_d t)*(a + a_dag) for `duration`, to watch the
+    #     populations oscillate in time (full lab-frame Hamiltonian, so leakage
+    #     into |2> shows up). Keep omega_rabi << |alpha|.
+    #     """
+    #     w_d = self.omega_q if drive_frequency is None else drive_frequency
+    #     if psi0 is None:
+    #         psi0 = self.ground_state
+    #     t_vals = np.arange(0, duration, 1.0 / sample_rate)
+    #     drive = omega_rabi * np.cos(w_d * t_vals)
+    #     H = [self.H0, [self.a + self.a_dag, drive]]
+    #     result = qt.sesolve(H, psi0, t_vals,
+    #                         options={'store_states': True, 'nsteps': 100000})
+    #     psi_traj = np.array([state.full().ravel() for state in result.states])
+    #     return t_vals, psi_traj
+
 
     def populations(self, psi_traj):
         """Population of each level at every time step (shape (n_steps, n_levels))."""
@@ -512,4 +513,28 @@ class TransmonQubit:
         save_and_show(save_as)
 
 
+class RabiDrive(DrivePulse):
+    """
+    A continuous drive with constant amplitude Omega(t) = omega_rabi for
+    `duration` (a square envelope), to watch Rabi oscillations.
 
+    omega_rabi : Rabi frequency (the constant envelope amplitude).
+    duration : length of the drive.
+    drive_frequency : carrier frequency; None means resonant with the qubit.
+    """
+
+    def __init__(self, omega_rabi, duration=400.0, phase=0.0, sample_rate=200.0,
+                 drive_frequency=None):
+        super().__init__(angle=omega_rabi * duration, phase=phase,
+                         sigma=duration / 2, n_sigma=1, sample_rate=sample_rate,
+                         drive_frequency=drive_frequency)
+        self.omega_rabi = omega_rabi
+        self.duration = duration
+
+    def envelope(self, t, t0=0.0):
+        return self.omega_rabi * np.where(np.abs(t - t0) <= self.duration / 2, 1.0, 0.0)
+
+
+    def detuning(self, omega_q):
+            """Return the detuning of a drive from the qubit's 0<->1 transition."""
+            return self.omega_rabi - omega_q
