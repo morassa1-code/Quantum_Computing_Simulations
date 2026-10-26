@@ -506,16 +506,16 @@ class TransmonQubit:
             return 0.5 * A * (1 - np.cos(w * t)) + B
 
         (A, w, B), _ = curve_fit(model, tau, pop, p0=[pop.max(), w0, pop.mean()])
-        result = {'max_pop': pop.max(), 'A_fit': A, 'omega_eff': abs(w),
-                  'fit': model(tau, A, w, B)}
+        result = {'max_pop': pop.max(), 'max_pop_fit': A, 'omega_eff': abs(w), 
+                  'offset_fit': B, 'fit': model(tau, A, w, B)}
 
         print(f'|{level}> population: max = {pop.max():.4f}, fit amplitude = {A:.4f}, '
-              f'fit omega = {abs(w):.5f}')
+              f'fit omega = {abs(w):.5f}', f'(fit offset = {B:.4f})')
         if drive is not None:
-            A_th, w_th = drive.expected_rabi(self.omega_q)
-            result.update(max_pop_theory=A_th, omega_eff_theory=w_th)
-            print(f'theory:        max = {A_th:.4f}, omega = {w_th:.5f}  '
-                  f'(errors: {abs(A - A_th) / A_th:.1%}, {abs(abs(w) - w_th) / w_th:.1%})')
+            max_pop_theory, omega_th = drive.expected_rabi(self.omega_q)
+            result.update(max_pop_theory=max_pop_theory, omega_eff_theory=omega_th)
+            print(f'theory:        max = {max_pop_theory:.4f}, omega = {omega_th:.5f}  '
+                  f'(errors: {abs(A - max_pop_theory) / max_pop_theory:.1%}, {abs(abs(w) - omega_th) / omega_th:.1%})')
         return result
 
     def plot_populations(self, t_vals, psi_traj, fit=None, save_as=None):
@@ -564,5 +564,5 @@ class RabiDrive(DrivePulse):
     def expected_rabi(self, omega_q):
         """Two-level RWA theory: (max population, oscillation frequency)."""
         delta = self.detuning(omega_q)
-        w = np.hypot(self.omega_rabi, delta)
+        w = np.hypot(self.omega_rabi, delta) # Rabi frequency sqrt(Omega^2 + Delta^2)
         return self.omega_rabi**2 / w**2, w
