@@ -19,6 +19,16 @@ def save_and_show(save_as=None, dpi=200):
     plt.show()
 
 
+def save_text(text, name):
+    """Save text to DATA_DIR/name (.txt if no extension) and return the path."""
+    os.makedirs(DATA_DIR, exist_ok=True)
+    name = name if os.path.splitext(name)[1] else name + '.txt'
+    path = os.path.join(DATA_DIR, name)
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(text)
+    return path
+
+
 def export_bloch_glb(x, y, z, name, max_points=400, tube_radius=0.015):
     """
     Save a Bloch-sphere path as a 3D model (.glb) in DATA_DIR: a translucent
@@ -482,7 +492,7 @@ class TransmonQubit:
         return np.abs(psi_traj)**2
 
 
-    def fit_rabi(self, t_vals, psi_traj, drive=None, level=1, n_fft=2**15):
+    def fit_rabi(self, t_vals, psi_traj, drive=None, level=1, n_fft=2**15, save_as=None):
         """
         Fit the population of `level` to the two-level Rabi formula
 
@@ -491,8 +501,9 @@ class TransmonQubit:
         where A is the maximum population and w the oscillation frequency
         (generalized Rabi frequency sqrt(Omega^2 + Delta^2)). If `drive` is a
         RabiDrive, the fit is compared with the theory A = Omega^2/(Omega^2 +
-        Delta^2), w = sqrt(Omega^2 + Delta^2). Prints the comparison and
-        returns a dict (max_pop, omega_eff, fit, and the theory values).
+        Delta^2), w = sqrt(Omega^2 + Delta^2). Returns a dict (max_pop,
+        omega_eff, fit, and the theory values). The comparison is saved to
+        DATA_DIR/save_as (.txt if no extension), or printed if save_as is None.
         """
         tau = np.asarray(t_vals) - t_vals[0]
         pop = self.populations(psi_traj)[:, level]
@@ -509,13 +520,22 @@ class TransmonQubit:
         result = {'max_pop': pop.max(), 'max_pop_fit': A, 'omega_eff': abs(w), 
                   'offset_fit': B, 'fit': model(tau, A, w, B)}
 
-        print(f'|{level}> population: max = {pop.max():.4f}, fit amplitude = {A:.4f}, '
-              f'fit omega = {abs(w):.5f}', f'(fit offset = {B:.4f})')
+        report = [f'omega_q = {self.omega_q}, alpha = {self.alpha}, n_levels = {self.n_levels}',
+                  f'|{level}> population: max = {pop.max():.4f}, fit amplitude = {A:.4f}, '
+                  f'fit omega = {abs(w):.5f} (fit offset = {B:.4f})']
         if drive is not None:
             max_pop_theory, omega_th = drive.expected_rabi(self.omega_q)
             result.update(max_pop_theory=max_pop_theory, omega_eff_theory=omega_th)
-            print(f'theory:        max = {max_pop_theory:.4f}, omega = {omega_th:.5f}  '
-                  f'(errors: {abs(A - max_pop_theory) / max_pop_theory:.1%}, {abs(abs(w) - omega_th) / omega_th:.1%})')
+            report.insert(1, f'omega_rabi = {drive.omega_rabi}, '
+                             f'detuning = {drive.detuning(self.omega_q)}, duration = {drive.duration}')
+            report.append(f'theory:        max = {max_pop_theory:.4f}, omega = {omega_th:.5f}  '
+                          f'(errors: {abs(A - max_pop_theory) / max_pop_theory:.1%}, '
+                          f'{abs(abs(w) - omega_th) / omega_th:.1%})')
+        report = '\n'.join(report) + '\n'
+        if save_as:
+            save_text(report, save_as)
+        else:
+            print(report)
         return result
 
     def plot_populations(self, t_vals, psi_traj, fit=None, save_as=None):

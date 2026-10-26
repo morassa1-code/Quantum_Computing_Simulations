@@ -7,7 +7,7 @@ if __name__ == "__main__":
 
     rabi = RabiDrive(omega_rabi=0.1, duration=200, drive_frequency=q.omega_q)
     t_vals, psi_traj = q.apply_gate(rabi)
-    fit = q.fit_rabi(t_vals, psi_traj, drive=rabi)
+    fit = q.fit_rabi(t_vals, psi_traj, drive=rabi, save_as='rabi_fit')
     q.plot_populations(t_vals, psi_traj, fit=fit, save_as='rabi')
 
 
