@@ -1,0 +1,150 @@
+\documentclass[11pt]{article}
+\usepackage[a4paper,margin=2.2cm]{geometry}
+\usepackage{amsmath,amssymb,bm}
+\usepackage{braket}
+
+\newcommand{\dd}{\mathrm{d}}
+\newcommand{\ii}{\mathrm{i}}
+\newcommand{\ad}{a^{\dagger}}
+
+\title{Single transmon qubit gate simulation --- formulas}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+\noindent Units: $\hbar = 1$.
+
+%------------------------------------------------------------------
+\section*{Transmon (truncated Duffing oscillator)}
+\begin{align}
+  E_n &= n\,\omega_q + \frac{\alpha}{2}\,n(n-1), \qquad n = 0,\dots,N-1 \\
+  H_0 &= \sum_{n=0}^{N-1} E_n \ket{n}\!\bra{n}
+       = \omega_q\, \ad a + \frac{\alpha}{2}\, \ad \ad a a \\
+  \omega_{01} &= \omega_q, \qquad \omega_{12} = \omega_q + \alpha, \qquad \alpha < 0
+\end{align}
+
+%------------------------------------------------------------------
+\section*{Hamiltonian}
+\begin{align}
+  H(t) &= H_0 + s(t)\,(a + \ad) && \text{(lab frame, no RWA)} \\
+  \ii \frac{\dd}{\dd t}\ket{\psi(t)} &= H(t)\ket{\psi(t)}, \qquad
+  U(t) = \mathcal{T}\exp\!\left[-\ii\!\int_0^{t} H(t')\,\dd t'\right] \\
+  P_n(t) &= \left|\braket{n|\psi(t)}\right|^2
+\end{align}
+
+%------------------------------------------------------------------
+\section*{Envelope}
+\begin{align}
+  \Omega(t) &= A\,\exp\!\left[-\frac{(t-t_0)^2}{2\sigma^2}\right] \\
+  A &= \frac{\theta}{\sigma\sqrt{2\pi}} \\
+  \int_{-\infty}^{\infty} \Omega(t)\,\dd t &= A\,\sigma\sqrt{2\pi} = \theta
+\end{align}
+
+%------------------------------------------------------------------
+\section*{Pulse duration and rotation angle}
+\begin{align}
+  T &= 2\,n_\sigma \sigma, \qquad t \in \left[\,t_0 - n_\sigma\sigma,\; t_0 + n_\sigma\sigma\,\right] \\
+  \sigma &= \frac{T}{2\,n_\sigma} \\
+  \theta_{\text{actual}} &= \int_{t_0 - n_\sigma\sigma}^{t_0 + n_\sigma\sigma} \Omega(t)\,\dd t
+     = A\,\sigma\sqrt{2\pi}\;\mathrm{erf}\!\left(\frac{n_\sigma}{\sqrt 2}\right) \\
+  \mathrm{erf}(x) &= \frac{2}{\sqrt{\pi}}\int_0^{x} e^{-u^2}\,\dd u \\
+  A_\pi &= \frac{\pi}{\sigma\sqrt{2\pi}} = \frac{1}{\sigma}\sqrt{\frac{\pi}{2}}
+\end{align}
+Time grid:
+\begin{equation}
+  \Delta t = \frac{1}{f_s}, \qquad t_k = t_0 - n_\sigma\sigma + k\,\Delta t
+\end{equation}
+Square envelope:
+\begin{equation}
+  \Omega_{\square}(t) = A\,\Theta\!\left(n_\sigma\sigma - |t - t_0|\right)
+\end{equation}
+
+%------------------------------------------------------------------
+\section*{Modulated drive signal}
+\begin{align}
+  s(t) &= \Omega(t)\cos(\omega_d t + \varphi) \\
+  \omega_d &= \omega_q \quad \text{(resonant, default)} \\
+  \varphi_X &= 0, \qquad \varphi_Y = \frac{\pi}{2}
+\end{align}
+
+%------------------------------------------------------------------
+\section*{DRAG}
+\begin{align}
+  \Omega_y(t) &= -\frac{\lambda}{\alpha}\,\frac{\dd\Omega}{\dd t}, \qquad
+  \frac{\dd\Omega}{\dd t} = -\frac{t - t_0}{\sigma^2}\,\Omega(t) \\
+  s(t) &= \Omega(t)\cos(\omega_d t + \varphi) + \Omega_y(t)\sin(\omega_d t + \varphi) \\
+       &= \mathrm{Re}\!\left[\big(\Omega(t) - \ii\,\Omega_y(t)\big)\,e^{\ii(\omega_d t + \varphi)}\right]
+\end{align}
+
+%------------------------------------------------------------------
+\section*{Rotating-wave approximation}
+\begin{align}
+  \Delta &= \omega_q - \omega_d \\
+  H_{\text{RWA}} &= \Delta\,\ad a + \frac{\alpha}{2}\,\ad \ad a a
+     + \frac{1}{2}\Big[\big(\Omega + \ii\,\Omega_y\big)\,e^{-\ii\varphi}\,\ad + \text{h.c.}\Big] \\
+  H_{\text{eff}}^{\text{qubit}} &= \frac{\Omega(t)}{2}\Big[\cos\varphi\,\sigma_x + \sin\varphi\,\sigma_y\Big] \\
+  U_{\text{gate}} &= \exp\!\left[-\ii\,\frac{\theta}{2}\,\big(\cos\varphi\,\sigma_x + \sin\varphi\,\sigma_y\big)\right],
+  \qquad \theta = \int \Omega(t)\,\dd t
+\end{align}
+
+%------------------------------------------------------------------
+\section*{Gates}
+\begin{align}
+  R_{\hat n}(\theta) &= \exp\!\left[-\ii\,\frac{\theta}{2}\,\hat n\cdot\bm{\sigma}\right] \\
+  X(\theta) &= R_x(\theta), \quad \varphi = 0 \\
+  Y(\theta) &= R_y(\theta), \quad \varphi = \tfrac{\pi}{2} \\
+  Z(\theta) &= R_z(\theta) = \exp\!\left[-\ii\,\frac{\theta}{2}\,\sigma_z\right]
+     \quad \Rightarrow \quad \varphi \;\to\; \varphi + \theta \ \text{ for all later pulses}
+\end{align}
+
+%------------------------------------------------------------------
+\section*{Virtual Z gate}
+\begin{align}
+  H_Z &= \frac{\sigma_z}{2}, \qquad \ket{\psi(\tau)} = e^{-\ii\tau\sigma_z/2}\ket{\psi_0},
+  \qquad \tau \in [0, \theta] \\
+  U_Z(\theta) &= e^{-\ii\theta\sigma_z/2}
+     = \begin{pmatrix} e^{-\ii\theta/2} & 0 \\ 0 & e^{\ii\theta/2} \end{pmatrix} \\
+  \ket{\psi_0} &= \ket{+} = \frac{\ket{0} + \ket{1}}{\sqrt{2}} \\
+  \begin{pmatrix} x(\tau) \\ y(\tau) \end{pmatrix}
+    &= \begin{pmatrix} \cos\tau & -\sin\tau \\ \sin\tau & \cos\tau \end{pmatrix}
+       \begin{pmatrix} x_0 \\ y_0 \end{pmatrix}, \qquad z(\tau) = z_0 \\
+  \bm{r}_{\ket{+}}(\tau) &= \big(\cos\tau,\; \sin\tau,\; 0\big) \\
+  \varphi_k &\to \varphi_k + \theta \quad \text{for every later pulse } k
+\end{align}
+
+%------------------------------------------------------------------
+\section*{Bloch vector (qubit subspace)}
+\begin{align}
+  \sigma_x &= \ket{0}\!\bra{1} + \ket{1}\!\bra{0}, \quad
+  \sigma_y = -\ii\ket{0}\!\bra{1} + \ii\ket{1}\!\bra{0}, \quad
+  \sigma_z = \ket{0}\!\bra{0} - \ket{1}\!\bra{1} \\
+  P_{01} &= \ket{0}\!\bra{0} + \ket{1}\!\bra{1} \\
+  \bm{r}(t) &= \frac{\big(\braket{\sigma_x},\, \braket{\sigma_y},\, \braket{\sigma_z}\big)}{\braket{P_{01}}} \\
+  \begin{pmatrix} x' \\ y' \end{pmatrix}
+    &= \begin{pmatrix} \cos\omega_d t & -\sin\omega_d t \\ \sin\omega_d t & \cos\omega_d t \end{pmatrix}
+       \begin{pmatrix} x \\ y \end{pmatrix}, \qquad z' = z
+       \quad \text{(rotating frame)} \\
+  c_1 &\to c_1\, e^{\ii\omega_d t}
+\end{align}
+
+%------------------------------------------------------------------
+\section*{Leakage}
+\begin{equation}
+  P_{\text{leak}}(t) = \sum_{n \ge 2} P_n(t), \qquad
+  P_{\text{subspace}} = \braket{P_{01}}
+\end{equation}
+
+%------------------------------------------------------------------
+\section*{Spectrum}
+\begin{align}
+  \tilde{s}(\omega) &= \int s(t)\,e^{-\ii\omega t}\,\dd t \\
+  \tilde{\Omega}(\omega) &= A\,\sigma\sqrt{2\pi}\;e^{-\sigma^2\omega^2/2} \\
+  \tilde{s}(\omega) &\approx \frac{1}{2}\Big[\tilde{\Omega}(\omega - \omega_d)\,e^{\ii\varphi}
+     + \tilde{\Omega}(\omega + \omega_d)\,e^{-\ii\varphi}\Big]
+     \quad \text{(no DRAG)} \\
+  \Delta\omega &\sim \frac{1}{\sigma}, \qquad
+  \omega_k = \frac{2\pi k}{N_{\text{fft}}\,\Delta t}
+\end{align}
+
+\end{document}

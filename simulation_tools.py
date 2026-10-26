@@ -1,6 +1,94 @@
+import os
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.linalg import expm
+import qutip as qt
+
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
+
+
+def save_and_show(save_as=None, dpi=200):
+    """Save the current figure to DATA_DIR/save_as (.png if no extension), then show it."""
+    if save_as:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        name = save_as if os.path.splitext(save_as)[1] else save_as + '.png'
+        plt.savefig(os.path.join(DATA_DIR, name), dpi=dpi, bbox_inches='tight')
+    plt.show()
+
+
+def export_bloch_glb(x, y, z, name, max_points=400, tube_radius=0.015):
+    """
+    Save a Bloch-sphere path as a 3D model (.glb) in DATA_DIR: a translucent
+    unit sphere, x/y/z axes, the trajectory as a red tube, a green start
+    marker and a red end marker. In PowerPoint use Insert > 3D Models, then
+    drag to rotate it during the slide show. A .glb has no text, so label
+    the axes (|0>, |1>, |+>, ...) with text boxes on the slide.
+    """
+    import trimesh
+    from trimesh.visual.material import PBRMaterial
+
+    os.makedirs(DATA_DIR, exist_ok=True)
+    name = name if os.path.splitext(name)[1] else name + '.glb'
+
+    # glTF is Y-up: map Bloch (x, y, z) -> (x, z, -y) so that |0> points up
+    pts = np.column_stack([x, z, -np.asarray(y)])
+    pts = pts[np.linspace(0, len(pts) - 1, min(max_points, len(pts))).astype(int)]
+
+    def solid(mesh, rgba):
+        mesh.visual = trimesh.visual.TextureVisuals(material=PBRMaterial(
+            baseColorFactor=rgba, metallicFactor=0.0, roughnessFactor=0.8,
+            alphaMode='BLEND' if rgba[3] < 1.0 else 'OPAQUE', doubleSided=True))
+        return mesh
+
+    scene = trimesh.Scene()
+    scene.add_geometry(solid(trimesh.creation.icosphere(subdivisions=4, radius=1.0),
+                             [0.8, 0.8, 0.8, 0.25]), geom_name='sphere')
+    # axes in glTF coordinates (Y up): Bloch X, Bloch Y (-Z in glTF), Bloch Z (+Y in glTF)
+    axes = (('x', [1, 0, 0], [0.12, 0.35, 0.85, 1.0]),
+            ('y', [0, 0, -1], [0.10, 0.60, 0.25, 1.0]),
+            ('z', [0, 1, 0], [0.25, 0.25, 0.25, 1.0]))
+    for label, direction, rgba in axes:
+        direction = np.array(direction, dtype=float)
+        shaft = trimesh.creation.cylinder(radius=0.02,
+                                          segment=[-1.25 * direction, 1.25 * direction])
+        scene.add_geometry(solid(shaft, rgba), geom_name=f'axis_{label}')
+        tip = trimesh.creation.cone(radius=0.06, height=0.18,
+                                    transform=trimesh.geometry.align_vectors([0, 0, 1], direction))
+        tip.apply_translation(1.25 * direction)  # cone base at the axis end, pointing outward
+        scene.add_geometry(solid(tip, rgba), geom_name=f'arrow_{label}')
+        for sign in (1, -1):  # markers on the sphere at +-1, showing the poles
+            pole = trimesh.creation.icosphere(subdivisions=2, radius=0.04)
+            pole.apply_translation(sign * direction)
+            scene.add_geometry(solid(pole, rgba), geom_name=f'pole_{label}{"+" if sign > 0 else "-"}')
+    tube = trimesh.util.concatenate([
+        trimesh.creation.cylinder(radius=tube_radius, segment=[p0, p1], sections=8)
+        for p0, p1 in zip(pts[:-1], pts[1:]) if np.linalg.norm(p1 - p0) > 1e-9])
+    scene.add_geometry(solid(tube, [0.86, 0.08, 0.24, 1.0]), geom_name='trajectory')
+    for label, point, rgba in (('start', pts[0], [0.0, 0.6, 0.0, 1.0]),
+                               ('end', pts[-1], [0.9, 0.0, 0.0, 1.0])):
+        marker = trimesh.creation.icosphere(subdivisions=2, radius=0.05)
+        marker.apply_translation(point)
+        scene.add_geometry(solid(marker, rgba), geom_name=label)
+
+    path = os.path.join(DATA_DIR, name)
+    scene.export(path)
+    return path
+
+
+def save_bloch_gif(fig, bloch, name, n_frames=72, elev=25, fps=24):
+    """Save a GIF of the rendered qutip Bloch sphere turning once about Z, in DATA_DIR."""
+    from PIL import Image
+
+    os.makedirs(DATA_DIR, exist_ok=True)
+    name = name if os.path.splitext(name)[1] else name + '.gif'
+    frames = []
+    for azim in np.linspace(0, 360, n_frames, endpoint=False):
+        bloch.axes.view_init(elev=elev, azim=azim)
+        fig.canvas.draw()
+        frames.append(Image.fromarray(np.asarray(fig.canvas.buffer_rgba())).convert('RGB'))
+    path = os.path.join(DATA_DIR, name)
+    frames[0].save(path, save_all=True, append_images=frames[1:],
+                   duration=int(1000 / fps), loop=0)
+    return path
 
 
 class DrivePulse:
@@ -49,7 +137,6 @@ class DrivePulse:
         self.drag_coeff = drag_coeff
         self.total_modulated_signal = None  # set by generate_drive_signal(): Omega(t)*cos(w_d t + phase)
         self.deriviate_modulated_signal = None  # envelope derivative used for DRAG
-        self.drag_alpha = None  # qubit anharmonicity, set by DRAG_scheme()
   
     @property
     def envelope_duration(self):
@@ -73,30 +160,30 @@ class DrivePulse:
         return np.arange(t0 - self.n_sigma * self.sigma,
                           t0 + self.n_sigma * self.sigma + dt, dt)
 
-    def generate_drive_signal(self, omega_q, t0=0.0):
-        """Lab-frame signal Omega(t)*cos(w_d t + phase) to add to (a + a_dag)."""
+    def generate_drive_signal(self, omega_q, t0=0.0, alpha=None):
+        """
+        Lab-frame signal Omega(t)*cos(w_d t + phase) to add to (a + a_dag).
+        If drag_coeff != 0, the DRAG quadrature is added too, which needs the
+        qubit anharmonicity alpha.
+        """
+        if self.drag_coeff != 0.0 and alpha is None:
+            raise ValueError("DRAG needs the qubit anharmonicity: pass alpha")
         t = self.time_array(t0)
         w_d = self.drive_frequency if self.drive_frequency is not None else omega_q
         env = self.envelope(t, t0)
         theta = w_d * t + self.phase
         signal = env * np.cos(theta)
-        if self.drag_coeff != 0.0 and self.drag_alpha is not None:
-            # DRAG: quadrature Omega_y = -(lambda/alpha) * dOmega/dt, 90 deg out of phase
+        if self.drag_coeff != 0.0:
+            # DRAG: quadrature Omega_y = -(lambda/alpha) * dOmega/dt, 90 deg out of phase (deriviate)
             dt = 1.0 / self.sample_rate
             self.deriviate_modulated_signal = np.gradient(env, dt)
-            omega_y = -(self.drag_coeff / self.drag_alpha) * self.deriviate_modulated_signal
+            omega_y = -(self.drag_coeff / alpha) * self.deriviate_modulated_signal
             signal = signal + omega_y * np.sin(theta)  # lab-frame sign for H = Omega(t)(a + a_dag)
         self.total_modulated_signal = signal
         return t, self.total_modulated_signal
 
-    def DRAG_scheme(self, omega_q, alpha, t0=0.0):
-        """Enable DRAG for this pulse (needs the qubit anharmonicity alpha) and regenerate the signal."""
-        self.drag_alpha = alpha
-        return self.generate_drive_signal(omega_q, t0)
-
-
-    def plot(self, omega_q, t0=0.0):
-        t, signal = self.generate_drive_signal(omega_q, t0)
+    def plot(self, omega_q, t0=0.0, alpha=None, save_as=None):
+        t, signal = self.generate_drive_signal(omega_q, t0, alpha)
         plt.plot(t, self.envelope(t, t0), 'k--', label='envelope')
         plt.plot(t, signal, label='drive')
         plt.xlabel('Time (arb. units)')
@@ -104,9 +191,10 @@ class DrivePulse:
         plt.title(f'{self.__class__.__name__} (angle={self.angle:.3f})')
         plt.legend()
         plt.grid()
-        plt.show()
+        save_and_show(save_as)
 
-    def plot_bloch_trajectory(self, qubit, psi0=None, t0=0.0, frame='lab'):
+    def plot_bloch_trajectory(self, qubit, psi0=None, t0=0.0, frame='lab', save_as=None,
+                              save_3d=None, save_gif=None):
         """
         Simulate this pulse acting on `qubit` and plot the state's path on
         the Bloch sphere, projected onto the |0>,|1> subspace (any
@@ -126,71 +214,73 @@ class DrivePulse:
             read out Rabi oscillations experimentally. When w_d ==
             qubit.omega_q (resonant drive, the default), this is the frame
             in which H0 is exactly cancelled, labeled the Heisenberg frame.
+
+        save_as : str, optional
+            File name to save the figure under in the data folder.
+        save_3d : str, optional
+            File name (.glb) for an interactive 3D model of the sphere and
+            trajectory, for PowerPoint's Insert > 3D Models.
+        save_gif : str, optional
+            File name (.gif) for an animation of the sphere turning about Z.
         """
         t_vals, psi_traj = qubit.apply_gate(self, psi0=psi0, t0=t0)
 
-        c0, c1 = psi_traj[:, 0], psi_traj[:, 1]
         w_d = self.drive_frequency if self.drive_frequency is not None else qubit.omega_q
-        if frame == 'rotating':
-            c1 = c1 * np.exp(1j * w_d * t_vals)
-        elif frame != 'lab':
+        if frame not in ('lab', 'rotating'):
             raise ValueError("frame must be 'lab' or 'rotating'")
 
-        norm = np.sqrt(np.abs(c0) ** 2 + np.abs(c1) ** 2)
-        c0, c1 = c0 / norm, c1 / norm
+        # Pauli operators on the |0>,|1> subspace of the full n_levels space
+        n = qubit.n_levels
+        sx = qt.projection(n, 0, 1) + qt.projection(n, 1, 0)
+        sy = -1j * qt.projection(n, 0, 1) + 1j * qt.projection(n, 1, 0)
+        sz = qt.projection(n, 0, 0) - qt.projection(n, 1, 1)
+        p01 = qt.projection(n, 0, 0) + qt.projection(n, 1, 1)
 
-        bloch_x = 2 * np.real(np.conj(c0) * c1)
-        bloch_y = 2 * np.imag(np.conj(c0) * c1)
-        bloch_z = np.abs(c0) ** 2 - np.abs(c1) ** 2
+        states = [qt.Qobj(row.reshape(-1, 1)) for row in psi_traj]
+        # dividing by <P01> renormalizes the projection onto the qubit subspace
+        # (population leaked to |2>, ... is discarded)
+        pop = np.real(qt.expect(p01, states))
+        bloch_x = np.real(qt.expect(sx, states)) / pop
+        bloch_y = np.real(qt.expect(sy, states)) / pop
+        bloch_z = np.real(qt.expect(sz, states)) / pop
 
-        fig = plt.figure(figsize=(6, 6))
-        ax = fig.add_subplot(111, projection='3d')
+        if frame == 'rotating':
+            # undo the free precession: multiply the |1> amplitude by exp(i w_d t),
+            # i.e. rotate (x, y) about Z by w_d t
+            phi = w_d * t_vals
+            bloch_x, bloch_y = (bloch_x * np.cos(phi) - bloch_y * np.sin(phi),
+                                bloch_x * np.sin(phi) + bloch_y * np.cos(phi))
 
-        # flat, matte sphere: a single smooth surface, no latitude/longitude grid
-        u, v = np.mgrid[0:2 * np.pi:60j, 0:np.pi:30j]
-        ax.plot_surface(np.cos(u) * np.sin(v), np.sin(u) * np.sin(v), np.cos(v),
-                         color='lightgray', alpha=0.25, linewidth=0,
-                         edgecolor='none', shade=False, antialiased=True)
-
-        # x/y/z axes through the sphere, labeled by their Bloch eigenstates
-        axis_len = 1.3
-        for dx, dy, dz in [(1, 0, 0), (0, 1, 0), (0, 0, 1)]:
-            ax.plot([-axis_len * dx, axis_len * dx],
-                    [-axis_len * dy, axis_len * dy],
-                    [-axis_len * dz, axis_len * dz],
-                    color='gray', linewidth=0.8)
-
-        label_pos = 1.4
-        ax.text(0, 0, label_pos, r'$|0\rangle$ (+Z)', ha='center')
-        ax.text(0, 0, -label_pos, r'$|1\rangle$ (-Z)', ha='center')
-        ax.text(label_pos, 0, 0, r'$|+\rangle$ (+X)', ha='center')
-        ax.text(-label_pos, 0, 0, r'$|-\rangle$ (-X)', ha='center')
-        ax.text(0, label_pos, 0, r'$|{+i}\rangle$ (+Y)', ha='center')
-        ax.text(0, -label_pos, 0, r'$|{-i}\rangle$ (-Y)', ha='center')
-
-        ax.plot(bloch_x, bloch_y, bloch_z, color='crimson', linewidth=2)
-        ax.scatter(bloch_x[0], bloch_y[0], bloch_z[0], color='g', s=60, label='initial')
-        ax.scatter(bloch_x[-1], bloch_y[-1], bloch_z[-1], color='r', s=60, label='final')
-
-        ax.set_box_aspect([1, 1, 1])
-        ax.set_xlim(-label_pos, label_pos)
-        ax.set_ylim(-label_pos, label_pos)
-        ax.set_zlim(-label_pos, label_pos)
-        ax.set_axis_off()
         if frame == 'lab':
             frame_label = 'lab frame'
         elif w_d == qubit.omega_q:
             frame_label = 'Heisenberg frame'
         else:
             frame_label = 'rotating frame (drive)'
-        ax.set_title(f'{self.__class__.__name__} (angle={self.angle:.3f}) on Bloch sphere '
-                     f'[{frame_label}]')
-        ax.legend()
-        plt.show()
+
+        fig = plt.figure(figsize=(6, 6))
+        b = qt.Bloch(fig=fig)
+        b.xlabel = [r'$|+\rangle$', r'$|-\rangle$']
+        b.ylabel = [r'$|{+i}\rangle$', r'$|{-i}\rangle$']
+        b.zlabel = [r'$|0\rangle$', r'$|1\rangle$']
+        b.point_size = [4, 60, 60]  # trajectory, initial, final
+        b.add_points([bloch_x, bloch_y, bloch_z], meth='l', colors=['crimson'])
+        b.add_points([[bloch_x[0]], [bloch_y[0]], [bloch_z[0]]], colors=['g'])
+        b.add_points([[bloch_x[-1]], [bloch_y[-1]], [bloch_z[-1]]], colors=['r'])
+        b.render()
+        fig.suptitle(f'{self.__class__.__name__} (angle={self.angle:.3f}) on Bloch sphere '
+                     f'[{frame_label}]\n(green: initial, red: final)')
+        if save_3d:
+            export_bloch_glb(bloch_x, bloch_y, bloch_z, save_3d)
+        if save_gif:
+            save_bloch_gif(fig, b, save_gif)
+            b.axes.view_init(elev=30, azim=-60)  # qutip's default view for the still image
+        save_and_show(save_as)
 
         return bloch_x, bloch_y, bloch_z
 
-    def frequency_spectrum(self, omega_q=None, alpha=None, plot=True, n_fft=2**17):
+    def frequency_spectrum(self, omega_q=None, alpha=None, plot=True, n_fft=2**17,
+                           save_as=None):
         """
         Compute the Fourier transform of the drive signal, centered on the drive frequency (or the qubit frequency if drive_frequency is None).
         Returns the angular frequencies and the corresponding Fourier transform of the signal.
@@ -202,14 +292,13 @@ class DrivePulse:
             If True, plots the magnitude of the Fourier transform around the drive frequency.
         n_fft : int, optional
             The number of points to use in the FFT. Default is 2**15 for zero padding.
+        save_as : str, optional
+            File name to save the plot under in the data folder (needs plot=True).
         """
-        if self.drag_coeff != 0.0:
-            self.DRAG_scheme(omega_q, alpha)
         if self.total_modulated_signal is None:
-            raise ValueError("Call generate_drive_signal() before frequency_spectrum()")
-        # _, signal = self.generate_drive_signal(omega_q)
+            self.generate_drive_signal(omega_q, alpha=alpha)
+        
         signal_ft = np.fft.fftshift(np.fft.fft(self.total_modulated_signal, n=n_fft))
-        # angular frequency, same units as omega_q
         freqs = 2 * np.pi * np.fft.fftshift(
             np.fft.fftfreq(n_fft, d=1.0 / self.sample_rate))
         if plot:
@@ -227,7 +316,7 @@ class DrivePulse:
             plt.ylabel('Magnitude')
             plt.title(f'{self.__class__.__name__} frequency spectrum')
             plt.grid()
-            plt.show()
+            save_and_show(save_as)
         return freqs, signal_ft
 
 
@@ -258,6 +347,50 @@ class ZGate:
         pulse.phase += self.angle
         return pulse
 
+    def plot_bloch_trajectory(self, psi0=None, n_points=200, save_as=None,
+                              save_3d=None, save_gif=None):
+        """
+        Plot the virtual Z gate on the Bloch sphere. There is no pulse and
+        no duration: the gate is a frame change by `angle` about Z (the
+        phase added to later X/Y pulses in apply_to), so the trajectory is
+        the rotation exp(-i*angle*sigma_z/2), obtained by evolving psi0
+        under H = sigma_z/2 for a "time" equal to the angle.
+
+        psi0 : qutip ket, optional
+            Initial qubit state. Default is |+>, since the ground state
+            sits on the Z axis and would not move.
+        save_as, save_3d, save_gif : str, optional
+            File names (in the data folder) for the still image, the 3D
+            model (.glb) and the rotating GIF, as in DrivePulse.
+        """
+        if psi0 is None:
+            psi0 = (qt.basis(2, 0) + qt.basis(2, 1)).unit() # |+> state
+        tlist = np.linspace(0.0, self.angle, n_points)
+        result = qt.sesolve(qt.sigmaz() / 2, psi0, tlist,
+                            e_ops=[qt.sigmax(), qt.sigmay(), qt.sigmaz()])
+        bloch_x, bloch_y, bloch_z = (np.real(e) for e in result.expect)
+
+        fig = plt.figure(figsize=(6, 6))
+        b = qt.Bloch(fig=fig)
+        b.xlabel = [r'$|+\rangle$', r'$|-\rangle$']
+        b.ylabel = [r'$|{+i}\rangle$', r'$|{-i}\rangle$']
+        b.zlabel = [r'$|0\rangle$', r'$|1\rangle$']
+        b.point_size = [4, 60, 60]  # trajectory, initial, final
+        b.add_points([bloch_x, bloch_y, bloch_z], meth='l', colors=['crimson'])
+        b.add_points([[bloch_x[0]], [bloch_y[0]], [bloch_z[0]]], colors=['g'])
+        b.add_points([[bloch_x[-1]], [bloch_y[-1]], [bloch_z[-1]]], colors=['r'])
+        b.render()
+        fig.suptitle(f'ZGate (angle={self.angle:.3f}) on Bloch sphere [virtual Z]\n'
+                     '(green: initial, red: final)')
+        if save_3d:
+            export_bloch_glb(bloch_x, bloch_y, bloch_z, save_3d)
+        if save_gif:
+            save_bloch_gif(fig, b, save_gif)
+            b.axes.view_init(elev=30, azim=-60)  # qutip's default view for the still image
+        save_and_show(save_as)
+
+        return bloch_x, bloch_y, bloch_z
+
 
 class TransmonQubit:
     """
@@ -285,29 +418,30 @@ class TransmonQubit:
 
     @property
     def H0(self):
-        return np.diag(self.energies).astype(complex)
+        return qt.Qobj(np.diag(self.energies))
 
     @property
     def a(self):
-        return np.diag(np.sqrt(np.arange(1, self.n_levels)), k=1).astype(complex)
+        return qt.destroy(self.n_levels)
 
     @property
     def a_dag(self):
-        return self.a.conj().T
+        return self.a.dag()
 
     @property
     def ground_state(self):
-        psi0 = np.zeros(self.n_levels, dtype=complex)
-        psi0[0] = 1.0
-        return psi0
+        return qt.basis(self.n_levels, 0)
 
     def apply_gate(self, pulse, psi0=None, t0=0.0):
         """
-        Propagate a state through a drive pulse by direct time integration
-        of the full lab-frame Hamiltonian H0 + Omega(t)*cos(w_d t+phase)*(a+a_dag)
+        Propagate a state through a drive pulse with qutip.sesolve on the
+        full lab-frame Hamiltonian H0 + Omega(t)*cos(w_d t+phase)*(a+a_dag)
         - no RWA, no 2-level truncation, so leakage out of the qubit
-        subspace (into |2>, etc.) shows up naturally. Step size is set by
-        the pulse's own sample_rate.
+        subspace (into |2>, etc.) shows up naturally. The drive is passed
+        to qutip as an array sampled on the pulse's own time grid (set by
+        its sample_rate).
+
+        psi0 may be a qutip ket or a plain vector (default: ground state).
 
         Returns the time grid and the full complex state at every step
         (shape (len(t_vals), n_levels)), so callers can get populations
@@ -316,24 +450,16 @@ class TransmonQubit:
         """
         if psi0 is None:
             psi0 = self.ground_state
+        elif not isinstance(psi0, qt.Qobj):
+            psi0 = qt.Qobj(np.asarray(psi0, dtype=complex).reshape(-1, 1))
 
-        if pulse.drag_coeff != 0.0:
-            pulse.DRAG_scheme(self.omega_q, self.alpha, t0)
-        else:
-            pulse.generate_drive_signal(self.omega_q, t0)
+        pulse.generate_drive_signal(self.omega_q, t0, self.alpha)
         t_vals = pulse.time_array(t0)
-        dt = t_vals[1] - t_vals[0]
-        w_d = pulse.drive_frequency if pulse.drive_frequency is not None else self.omega_q
-        drive_op = self.a + self.a_dag
 
-        psi_traj = np.empty((len(t_vals), self.n_levels), dtype=complex)
-        psi_traj[0] = psi0
+        H = [self.H0, [self.a + self.a_dag, pulse.total_modulated_signal]]
+        result = qt.sesolve(H, psi0, t_vals,
+                            options={'store_states': True, 'nsteps': 100000})
 
-        for i in range(len(t_vals) - 1):
-            t = t_vals[i]
-            Om = pulse.total_modulated_signal[i]  # Omega(t) at this time
-            H = self.H0 + Om * drive_op
-            psi_traj[i + 1] = expm(-1j * H * dt / self.hbar) @ psi_traj[i]
-
+        psi_traj = np.array([state.full().ravel() for state in result.states])
         return t_vals, psi_traj
 
