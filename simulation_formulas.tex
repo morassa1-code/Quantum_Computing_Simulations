@@ -147,4 +147,131 @@ Square envelope:
   \omega_k = \frac{2\pi k}{N_{\text{fft}}\,\Delta t}
 \end{align}
 
+%==================================================================
+\part*{scqubits model (\texttt{scqubits\_tools.py})}
+\noindent Units in this part: energies $E$ and frequencies $f = E/h$ in GHz,
+angular frequency $\omega = 2\pi f$ in rad/ns, times in ns. $\hbar = 1$.
+
+%------------------------------------------------------------------
+\section*{Transmon (scqubits, charge basis)}
+\begin{align}
+  H &= 4E_C\,(\hat n - n_g)^2 - E_J \cos\hat\varphi, \qquad [\hat\varphi, \hat n] = \ii \\
+  H &= 4E_C \sum_{n=-n_{\rm cut}}^{n_{\rm cut}} (n - n_g)^2 \ket{n}\!\bra{n}
+     - \frac{E_J}{2}\sum_{n=-n_{\rm cut}}^{n_{\rm cut}-1}
+       \big(\ket{n}\!\bra{n+1} + \ket{n+1}\!\bra{n}\big) \\
+  H\ket{j} &= E_j\ket{j}, \qquad f_{01} = E_1 - E_0, \qquad
+  \alpha = (E_2 - E_1) - (E_1 - E_0) \\
+  f_{01} &\approx \sqrt{8E_JE_C} - E_C, \qquad \alpha \approx -E_C
+  \qquad (E_J/E_C \gg 1)
+\end{align}
+Charge operator in the eigenbasis, used for the drive and the resonator coupling:
+\begin{align}
+  n_{ij} &= \braket{i|\hat n|j}, \qquad
+  \hat n \approx \ii\, n_{\rm zpf}\,(\ad - a), \qquad
+  n_{\rm zpf} = \frac{1}{\sqrt 2}\left(\frac{E_J}{8E_C}\right)^{1/4} \\
+  |n_{j,j+1}| &\approx \sqrt{j+1}\,|n_{01}|, \qquad
+  N_+ = \mathrm{triu}(n_{ij},\,1) = \sum_{i<j} n_{ij}\ket{i}\!\bra{j}
+\end{align}
+
+%------------------------------------------------------------------
+\section*{Transmon--resonator coupling and dispersive shift}
+\begin{align}
+  H &= H_q \otimes \mathbb{1} + \mathbb{1}\otimes H_r + g\, \hat n \otimes (a + \ad), \qquad
+  H_r = f_r\,\ad a \\
+  f_{01} &= E_{10} - E_{00}, \qquad
+  f_{r,0} = E_{01} - E_{00}, \qquad
+  f_{r,1} = E_{11} - E_{10} \\
+  \chi &= \frac{f_{r,1} - f_{r,0}}{2}
+\end{align}
+where $E_{jk}$ is the eigenvalue of the coupled eigenstate with the largest overlap with the
+bare state $\ket{j}_q\ket{k}_r$. Purcell limit (dispersive regime $|\Delta| \gg g$):
+\begin{align}
+  \Delta &= f_r - f_{01}, \qquad
+  \gamma_{\rm Purcell} = \kappa\left(\frac{g}{\Delta}\right)^{2}, \qquad
+  T_1^{\rm Purcell} = \frac{1}{2\pi\,\kappa\,(g/\Delta)^2}
+\end{align}
+with $\kappa$ in GHz (the $2\pi$ converts it to an angular rate in rad/ns).
+
+%------------------------------------------------------------------
+\section*{Coherence times (scqubits noise models)}
+Relaxation from Fermi's golden rule, for noise operator $A_{\rm noise}$ and spectral density $S$:
+\begin{align}
+  \frac{1}{T_1^{(c)}} &= \big|\braket{i|A_{\rm noise}|j}\big|^2\,\big[S(\omega_{ij}) + S(-\omega_{ij})\big],
+  \qquad \omega_{ij} = 2\pi\,(E_i - E_j) \\
+  x &= \frac{\hbar\omega}{k_BT}, \qquad
+  \Theta(\omega) = \frac{\coth(|x|/2)}{1 + e^{-x}}
+\end{align}
+Capacitive loss ($A_{\rm noise} = \hat n$, $T = 15$~mK by default):
+\begin{align}
+  S_{\rm cap}(\omega) &= 2\pi\cdot\frac{16\,E_C}{Q_{\rm cap}(\omega)}\;\Theta(\omega), \qquad
+  Q_{\rm cap}(\omega) = 10^{6}\left(\frac{2\pi\cdot 6\,\text{GHz}}{|\omega|}\right)^{0.7}
+\end{align}
+Charge-line impedance ($A_{\rm noise} = \hat n$, $Z = 50\,\Omega$ by default):
+\begin{align}
+  S_{Z}(\omega) &= \frac{2\omega}{Q_c}\;\Theta(\omega), \qquad
+  Q_c = \frac{R_K}{8\pi\,\mathrm{Re}\,Z}, \qquad R_K = \frac{h}{e^2}
+\end{align}
+(This channel gives $T_1 \approx 0.2$~ns for a transmon and is excluded by default in
+\texttt{coherence\_times}.) Pure dephasing from $1/f$ noise of a parameter $\lambda$
+with amplitude $A_\lambda$:
+\begin{align}
+  \frac{1}{T_\phi^{(\lambda)}} &= 2\pi\,A_\lambda\,
+  \Big|\braket{1|\partial_\lambda H|1} - \braket{0|\partial_\lambda H|0}\Big|\,
+  \sqrt{2\,\big|\ln(\omega_{\rm low}\,t_{\rm exp})\big|}
+\end{align}
+with $\lambda = E_J$ (critical current, $A_{cc} = 10^{-7}$) and $\lambda = n_g$
+(charge, $A_{n_g} = 10^{-4}$), $\omega_{\rm low} = 2\pi\cdot 10^{-9}$~GHz, $t_{\rm exp} = 10^{4}$~ns.
+Channels add as rates:
+\begin{align}
+  \frac{1}{T_1} &= \sum_{c} \frac{1}{T_1^{(c)}}, \qquad
+  \frac{1}{T_\phi} = \sum_{\lambda} \frac{1}{T_\phi^{(\lambda)}}, \qquad
+  \frac{1}{T_2} = \frac{1}{2T_1} + \frac{1}{T_\phi}
+\end{align}
+Because $1/T_\phi \ge 0$, always $T_2 \le 2T_1$.
+
+%------------------------------------------------------------------
+\section*{Rotating-frame dynamics with dissipation (\texttt{TransmonDynamics})}
+Eigenbasis of the $N$ lowest levels, frame rotating at the drive frequency $f_d$ (RWA):
+\begin{align}
+  H_0 &= \sum_{j=0}^{N-1} 2\pi\,\big(E_j - E_0 - j\,f_d\big)\ket{j}\!\bra{j} \\
+  H_d(t) &= \frac{A(t)}{2}\Big(e^{\ii\varphi} N_+ + e^{-\ii\varphi} N_+^{\dagger}\Big),
+  \qquad H = H_0 + H_d(t)
+\end{align}
+Lindblad master equation (solved with \texttt{qutip.mesolve}):
+\begin{align}
+  \dot\rho &= -\ii\,[H, \rho] + \sum_k \Big(L_k\rho L_k^{\dagger} - \tfrac12\{L_k^{\dagger}L_k, \rho\}\Big) \\
+  L_j &= \sqrt{\frac{j}{T_1}}\;\ket{j-1}\!\bra{j}, \quad j = 1,\dots,N-1
+  && \text{(relaxation)} \\
+  L_\phi &= \sqrt{\frac{1}{2T_\phi}}\,\mathrm{diag}(-1,\,1,\,0,\dots,0)
+  && \text{(dephasing of the 0--1 coherence at rate } 1/T_\phi)
+\end{align}
+Gaussian pulse of rotation angle $\theta$ on the 0--1 transition, truncated at $\pm 4\sigma$,
+normalised so that the area gives $\theta$:
+\begin{align}
+  A(t) &= A_0 \exp\!\left[-\frac{(t - 4\sigma)^2}{2\sigma^2}\right], \quad t \in [0, 8\sigma], \qquad
+  \int A(t)\,\dd t\;|n_{01}| = \theta \\
+  A_0 &= \frac{\theta}{|n_{01}|\sum_k e^{-(t_k - 4\sigma)^2/2\sigma^2}\,\Delta t},
+  \qquad \Delta t = \frac{1}{f_s}
+\end{align}
+Level populations: $P_j(t) = \braket{j|\rho(t)|j}$.
+
+%------------------------------------------------------------------
+\section*{Simulated $T_1$ and Ramsey ($T_2$) measurements}
+$T_1$: prepare $\ket{1}$, decay freely, fit
+\begin{equation}
+  P_1(t) = e^{-t/T_1}
+\end{equation}
+Ramsey: ideal, instantaneous $\pi/2$ gates, free evolution with the drive detuned by $\delta$
+(added to $H_0$ as $2\pi\delta\,j$ on level $j$):
+\begin{align}
+  U_{\pi/2} &= \exp\!\left[-\ii\,\frac{\pi}{4\,|n_{01}|}\big(N_+ + N_+^{\dagger}\big)\right], \qquad
+  \delta = \frac{20}{t_{\max}}, \quad t_{\max} = 3T_2 \\
+  \rho_{\rm in} &= U_{\pi/2}\ket{0}\!\bra{0}U_{\pi/2}^{\dagger}, \qquad
+  P_1(t) = \braket{1|\,U_{\pi/2}\,\rho(t)\,U_{\pi/2}^{\dagger}|1} \\
+  P_1^{\rm fit}(t) &= b + a\,e^{-t/T_2}\cos(2\pi\delta\,t)
+\end{align}
+Note: $U_{\pi/2}$ is built from the full $N_+$, so it also rotates the 1--2, 2--3, \dots\ transitions
+(by $|n_{12}|/|n_{01}| \approx \sqrt2$ times the angle) and leaks population out of the qubit
+subspace.
+
 \end{document}
