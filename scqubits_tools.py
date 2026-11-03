@@ -6,7 +6,7 @@ import scqubits as scq
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
 
-scq.settings.PROGRESSBAR_DISABLED = True
+scq.settings.PROGRESSBAR_DISABLED = False
 scq.settings.T1_DEFAULT_WARNING = False
 scq.set_units('GHz')  # energies/frequencies in GHz, coherence times in ns
 
@@ -16,25 +16,47 @@ DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
 
 def make_transmon(ej=20.0, ec=0.25, ng=0.0, ncut=30, n_levels=4):
     """
-    scqubits Transmon (cosine potential, charge basis). ej, ec in GHz; ng is
-    the offset charge (0 = the charge-insensitive sweet spot).
+    scqubits Transmon (cosine potential, charge basis).
+    ej : float
+        Josephson energy in GHz.
+    ec : float
+        Charging energy in GHz.
+    ng : float
+        Offset charge (0 = the charge-insensitive sweet spot).
+    ncut : int
+        Truncation level for the charge basis.
+    n_levels : int
+        Number of energy levels to consider.
     """
     return scq.Transmon(EJ=ej, EC=ec, ng=ng, ncut=ncut, truncated_dim=n_levels)
 
 
 def make_resonator(f_res=7.0, n_res=12):
-    """scqubits Oscillator (the readout resonator), f_res in GHz."""
+    """scqubits Oscillator (the readout resonator).
+    f_res : float
+        Resonator frequency in GHz.
+    n_res : int
+        Truncation level for the resonator.
+    """
     return scq.Oscillator(E_osc=f_res, truncated_dim=n_res)
 
 
 def transmon_resonator(tmon, resonator, g):
     """
-    Hamiltonian (qutip, GHz) of the scqubits transmon coupled to the scqubits
-    resonator, H = H_transmon + H_resonator + g * n_transmon * (a + a_dag),
+    Hamiltonian (qutip, GHz) of the transmon coupled to the resonator,
+    H = H_transmon + H_resonator + g * n_transmon * (a + a_dag)
+    H = H_q ⊗ 𝟙 + 𝟙 ⊗ H_r + g · n ⊗ (a + a†),
     written in the product of the two eigenbases (exact transmon energies and
     charge-operator matrix elements, so the coupling is not restricted to the
-    qubit's two levels). scqubits' HilbertSpace is not used: its 4.3.1 release
-    does not accept qutip 5 operators.
+    qubit's two levels). 
+    n_op is an operator counting the Cooper pairs that have tunnelled 
+    across the Josephson junction.
+    tmon : scqubits.Transmon
+        The transmon object.
+    resonator : scqubits.Oscillator
+        The resonator object.
+    g : float
+        Coupling strength in GHz.
     """
     n_q, n_r = tmon.truncated_dim, resonator.truncated_dim
     n_op = qt.Qobj(tmon.matrixelement_table('n_operator', evals_count=n_q))
@@ -53,7 +75,7 @@ def dispersive_shift(H, n_q, n_r):
     'f_res_1' (resonator frequency with the qubit in |0> / |1>) and the
     dispersive shift 'chi' = (f_res_1 - f_res_0) / 2.
     """
-    evals, evecs = H.eigenstates()
+    evals, evecs = H.eigenstates() # Diagonalizes the entire coupled system Hamiltonian
 
     def dressed(j, k):
         bare = qt.tensor(qt.basis(n_q, j), qt.basis(n_r, k))
@@ -69,14 +91,17 @@ def purcell_t1(g, delta, kappa):
     """
     Purcell-limited T1 (ns) of a qubit detuned by `delta` (GHz) from a
     resonator of linewidth `kappa` (GHz, angular rate/2pi) coupled with g (GHz):
-    gamma = kappa * (g/delta)^2, in angular units.
+    gamma = kappa * (g/delta)^2, in angular units. That is in the dispersive shift regime, 
+    where the qubit-resonator detuning is much larger than the coupling strength. 
     """
     return 1.0 / (TWO_PI * kappa * (g / delta) ** 2)
 
+# Read up to here
 
 def coherence_times(tmon, noise_channels=None):
     """
-    T1, T_phi and T2 (ns) of the 0<->1 transition from scqubits' noise models.
+    T1, T_phi and T2 of the 0<->1 transition from scqubits' noise models.
+    All returned values are in ns (1 us = 1e3 ns), because of set_units('GHz').
     `noise_channels` picks channels by scqubits name (see
     tmon.supported_noise_channels()); by default every supported channel but
     't1_charge_impedance', which gives an unphysical T1 of ~0.2 ns for a
@@ -104,6 +129,9 @@ class TransmonDynamics:
     """
 
     def __init__(self, tmon, t1=np.inf, t_phi=np.inf, f_drive=None):
+        """tmon: scqubits.Transmon; t1, t_phi: ns; f_drive: GHz (None = f01).
+        H0 = Σ_j 2π(E_j − E_0 − j·f_d) |j⟩⟨j|
+        """
         n = tmon.truncated_dim
         e = tmon.eigenvals(n)
         self.n = n
@@ -130,7 +158,7 @@ class TransmonDynamics:
         return 0.5 * amplitude * (np.exp(1j * phase) * self.n_up
                                   + np.exp(-1j * phase) * self.n_up.dag())
 
-    def gaussian_pulse(self, angle=np.pi, sigma=5.0, phase=0.0, sample_rate=50.0):
+    def gaussian_pulse(self, angle=np.pi, sigma=5.0, phase=0.0, sample_rate=100.0):
         """
         Gaussian pulse (truncated at +-4 sigma) rotating the 0<->1 transition by
         `angle`. Returns the time grid and the envelope A(t) in rad/ns, with
@@ -158,14 +186,17 @@ class TransmonDynamics:
         return np.array([np.real(np.diag(qt.ket2dm(s).full() if s.isket else s.full()))
                          for s in states])
 
-    def apply_pulse(self, angle=np.pi, sigma=5.0, sample_rate=50.0):
+    def apply_pulse(self, angle=np.pi, sigma=5.0, sample_rate=100.0):
         """pi-type pulse on |0>: returns times, level populations vs. time."""
         t, env = self.gaussian_pulse(angle, sigma, sample_rate=sample_rate)
         res = self.evolve(qt.basis(self.n, 0), t, env)
         return t, self.populations(res.states)
 
     def measure_t1(self, t_max=None, n_points=60):
-        """Prepare |1>, decay freely; fit P1 = exp(-t/T1). Returns (t1_fit, t, p1)."""
+        """
+        Prepare |1>, decay freely; fit P1 = exp(-t/T1). `t_max` in ns.
+        Returns (t1_fit [ns], t [ns], p1).
+        """
         t1_guess = self.t1
         t = np.linspace(0, t_max or 3 * t1_guess, n_points)
         res = self.evolve(qt.basis(self.n, 1), t)
@@ -175,9 +206,10 @@ class TransmonDynamics:
 
     def measure_t2(self, t_max=None, detuning=None, n_points=200):
         """
-        Ramsey: pi/2 - wait - pi/2 with the drive detuned by `detuning` (GHz)
-        from the qubit (default: 20 fringes over the window, GHz). Fits P1 = 0.5 + 0.5 exp(-t/T2) cos(2 pi detuning t)
-        and returns (t2_fit, t, p1).
+        Ramsey: pi/2 - wait - pi/2 with the drive detuned by `detuning` (GHz,
+        default: 20 fringes over the window) from the qubit; `t_max` in ns.
+        Fits P1 = b + a exp(-t/T2) cos(2 pi detuning t) and returns
+        (t2_fit [ns], t [ns], p1).
         """
         t_max = t_max or 3 * self.t2
         detuning = detuning or 20.0 / t_max
@@ -214,7 +246,12 @@ def save_text(text, name):
 
 
 if __name__ == '__main__':
-    ej, ec, f_res, g, kappa = 20.0, 0.25, 7.0, 0.1, 0.001  # GHz
+    # GHz
+    ej = 30
+    ec = 0.25
+    f_res = 5.0
+    kappa = 0.001
+    g = 0.1
 
     tmon = make_transmon(ej, ec)
     resonator = make_resonator(f_res)
