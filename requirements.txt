@@ -1,0 +1,6 @@
+numpy>=1.26
+scipy
+matplotlib
+qutip
+scqubits
+ipywidgets
