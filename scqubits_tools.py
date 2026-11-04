@@ -304,7 +304,7 @@ if __name__ == '__main__':
     x_gate = XGate(np.pi, sigma=5.0)
     t_pulse, traj = dyn.apply_gate(x_gate)
     pops = dyn.populations(traj)
-    x_gate.frequency_spectrum(omega_q=dyn.f01)
+    x_gate.frequency_spectrum(omega_q=dyn.f01, save_as='x_pi_frequency_spectrum')
     # x_gate.plot_bloch_trajectory()
 
     fig, axes = plt.subplots(1, 3, figsize=(15, 4))
