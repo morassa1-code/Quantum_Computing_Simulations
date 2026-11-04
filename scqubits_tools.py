@@ -216,15 +216,17 @@ class TransmonDynamics(TransmonQubit):
     def measure_t1(self, pulse=None, t_max=None, n_points=60):
         """
         Excite |0> with `pulse` (default XGate(pi)), decay freely and fit
-        P1 = a exp(-t/T1). `t_max` in ns. Returns (t1_fit [ns], t [ns], p1).
+        P1 = a exp(-t/T1). `t_max` in ns. Returns (t1_fit [ns], t [ns], p1,
+        fit curve on t).
         """
         pulse = XGate(np.pi) if pulse is None else pulse
         _, traj = self.apply_gate(pulse)
         t = np.linspace(0, t_max or 3 * self.t1, n_points)
         states = self.free_evolution(qt.Qobj(traj[-1]), t)
         p1 = np.array([np.real(s.full()[1, 1]) for s in states])
-        popt, _ = curve_fit(lambda x, tau, a: a * np.exp(-x / tau), t, p1, p0=[self.t1, p1[0]])
-        return popt[0], t, p1
+        model = lambda x, tau, a: a * np.exp(-x / tau)
+        popt, _ = curve_fit(model, t, p1, p0=[self.t1, p1[0]])
+        return popt[0], t, p1, model(t, *popt)
 
     def measure_t2(self, pulse=None, t_max=None, detuning=None, n_points=500):
         """
@@ -237,7 +239,8 @@ class TransmonDynamics(TransmonQubit):
             P1(t) = <1| S( U_wait(t)[ R S(|0><0|) R^dag ] ) |1>,
         with R moving the state after the first pulse into that frame.
         Fits P1 = b + a exp(-t/T2) cos(2 pi detuning t + phi) and returns
-        (t2_fit [ns], t [ns], p1).
+        (t2_fit [ns], t [ns], p1, fit curve on t, (lower, upper) decay
+        envelope b -/+ |a| exp(-t/T2)).
         """
         t_max = t_max or 3 * self.t2
         detuning = detuning or 20.0 / t_max
@@ -261,7 +264,9 @@ class TransmonDynamics(TransmonQubit):
         p1 = np.array([np.real(apply_s(s).full()[1, 1]) for s in states])
         fit = lambda x, tau, a, b, phi: b + a * np.exp(-x / tau) * np.cos(TWO_PI * detuning * x + phi)
         popt, _ = curve_fit(fit, t, p1, p0=[t_max / 3, 0.5, 0.5, 0.0])
-        return popt[0], t, p1
+        tau, a, b, _ = popt
+        decay = abs(a) * np.exp(-t / tau)
+        return tau, t, p1, fit(t, *popt), (b - decay, b + decay)
 
 
 def save_fig(name, dpi=150):
@@ -298,8 +303,8 @@ if __name__ == '__main__':
     dyn = TransmonDynamics(tmon, times['t1'], times['t_phi'])
     delta = f_res - dyn.f01
 
-    t1_fit, t_t1, p_t1 = dyn.measure_t1()
-    t2_fit, t_t2, p_t2 = dyn.measure_t2()
+    t1_fit, t_t1, p_t1, fit_t1 = dyn.measure_t1()
+    t2_fit, t_t2, p_t2, fit_t2, env_t2 = dyn.measure_t2()
 
     x_gate = XGate(np.pi, sigma=5.0)
     t_pulse, traj = dyn.apply_gate(x_gate)
@@ -311,10 +316,16 @@ if __name__ == '__main__':
     axes[0].plot(t_pulse, pops[:, :3])
     axes[0].set(xlabel='t (ns)', ylabel='population', title='pi pulse (Gaussian, sigma = 5 ns)')
     axes[0].legend(['|0>', '|1>', '|2>'])
-    axes[1].plot(t_t1 / 1e3, p_t1)
+    axes[1].plot(t_t1 / 1e3, p_t1, label='simulation')
+    axes[1].plot(t_t1 / 1e3, fit_t1, 'k--', label=f'fit: T1 = {t1_fit / 1e3:.2f} us')
     axes[1].set(xlabel='t (us)', ylabel='P(|1>)', title='T1 decay')
-    axes[2].plot(t_t2 / 1e3, p_t2)
+    axes[1].legend()
+    axes[2].plot(t_t2 / 1e3, p_t2, label='simulation')
+    axes[2].plot(t_t2 / 1e3, fit_t2, 'k--', lw=0.8, label='fit')
+    axes[2].plot(t_t2 / 1e3, env_t2[0], 'r-', label=f'envelope: T2 = {t2_fit / 1e3:.2f} us')
+    axes[2].plot(t_t2 / 1e3, env_t2[1], 'r-')
     axes[2].set(xlabel='t (us)', ylabel='P(|1>)', title='Ramsey')
+    axes[2].legend()
     plt.tight_layout()
     fig_path = save_fig('scq_dynamics')
 
