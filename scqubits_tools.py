@@ -1,3 +1,4 @@
+import copy
 import os
 
 import numpy as np
@@ -5,6 +6,8 @@ import qutip as qt
 import scqubits as scq
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
+
+from simulation_tools import TransmonQubit, XGate
 
 scq.settings.PROGRESSBAR_DISABLED = False
 scq.settings.T1_DEFAULT_WARNING = False
@@ -121,109 +124,143 @@ def coherence_times(tmon, noise_channels=None):
     return {'t1': t1, 't_phi': t_phi, 't2': t2}
 
 
-class TransmonDynamics:
+T1_CHANNEL_INFO = {
+    't1_capacitive':
+        'dielectric loss: the qubit\'s electric field reaches lossy materials (surface oxides,\n'
+        '      substrate, two-level-system defects in the interfaces), which absorb its energy.\n'
+        '      Set by the capacitor\'s quality factor Q_cap (scqubits default ~1e6).',
+    't1_charge_impedance':
+        'loss into a 50 Ohm charge line: the qubit\'s charge couples to the impedance of a\n'
+        '      drive/charge line and emits photons into it. scqubits assumes direct coupling\n'
+        '      to the line, giving an unphysical ~0.1 ns for a transmon, so it is excluded\n'
+        '      by default (real lines are coupled through a tiny capacitance).',
+}
+
+
+def t1_channel_report(tmon, noise_channels=None):
     """
-    Time evolution of a scqubits Transmon with qutip, in the eigenbasis and in
-    the frame rotating at the drive frequency (RWA), with T1 and pure
-    dephasing as Lindblad operators. Rates in rad/ns, times in ns.
+    Lines for the report: T1 of each scqubits T1 channel of `tmon`, with a
+    short explanation of its physical cause (T1_CHANNEL_INFO) and whether it
+    is included in the effective T1 (same default selection as
+    coherence_times).
+    """
+    supported = [c for c in tmon.supported_noise_channels() if c.startswith('t1')]
+    if noise_channels is None:
+        noise_channels = [c for c in supported if c != 't1_charge_impedance']
+    lines = ['T1 noise channels (1/T1 = sum of the included rates):']
+    for c in supported:
+        status = 'included' if c in noise_channels else 'excluded'
+        lines.append(f'  {c}: T1 = {getattr(tmon, c)() / 1e3:.4g} us ({status})')
+        lines.append(f'      {T1_CHANNEL_INFO.get(c, "no description")}')
+    return lines
+
+
+class TransmonDynamics(TransmonQubit):
+    """
+    A scqubits Transmon as a simulation_tools TransmonQubit, so the pulses
+    there (DrivePulse, XGate, YGate, RabiDrive) and apply_gate,
+    plot_bloch_trajectory, fit_rabi, ... work on it unchanged. Only the
+    Hamiltonian and the collapse operators change; the Duffing model is
+    replaced by the exact scqubits spectrum, in the lab frame and in angular
+    units (rad/ns, times in ns):
+
+        H0 = sum_j 2 pi (E_j - E_0) |j><j|,    drive_op = n / |<0|n|1>|
+
+    n is the charge operator in the eigenbasis, normalized so a pulse's area
+    is still its rotation angle on 0<->1. T1 and pure dephasing are Lindblad
+    operators (c_ops), so apply_gate runs mesolve and returns density matrices.
     """
 
-    def __init__(self, tmon, t1=np.inf, t_phi=np.inf, f_drive=None):
-        """tmon: scqubits.Transmon; t1, t_phi: ns; f_drive: GHz (None = f01).
-        H0 = Σ_j 2π(E_j − E_0 − j·f_d) |j⟩⟨j|
-        """
+    def __init__(self, tmon, t1=np.inf, t_phi=np.inf):
+        """tmon: scqubits.Transmon; t1, t_phi: ns (np.inf = channel off)."""
         n = tmon.truncated_dim
         e = tmon.eigenvals(n)
-        self.n = n
+        self.f01 = e[1] - e[0]  # GHz
+        self.anharmonicity = (e[2] - e[1]) - self.f01  # GHz
         self.t1, self.t_phi = t1, t_phi
-        self.f01 = e[1] - e[0]
-        self.alpha = (e[2] - e[1]) - self.f01
         self.t2 = 1.0 / (0.5 / t1 + 1.0 / t_phi)
-        self.f_drive = self.f01 if f_drive is None else f_drive
-        # rotating frame: level j shifts by -j * f_drive
-        self.H0 = qt.Qobj(np.diag(TWO_PI * (e - e[0] - np.arange(n) * self.f_drive)))
-        n_op = tmon.matrixelement_table('n_operator', evals_count=n)
-        self.n_up = qt.Qobj(np.triu(n_op, 1))  # raising part, kept by the RWA
-        self.n01 = abs(n_op[0, 1])
-        self.c_ops = []
+        c_ops = []
         if np.isfinite(t1):
-            self.c_ops += [np.sqrt(1.0 / t1) * qt.basis(n, j - 1) * qt.basis(n, j).dag()
-                           * np.sqrt(j) for j in range(1, n)]
+            c_ops += [np.sqrt(1.0 / t1) * qt.basis(n, j - 1) * qt.basis(n, j).dag()
+                      * np.sqrt(j) for j in range(1, n)]
         if np.isfinite(t_phi):
             # dephasing of the 0-1 coherence at rate 1/t_phi
-            self.c_ops.append(np.sqrt(0.5 / t_phi) * qt.Qobj(np.diag([-1, 1] + [0] * (n - 2))))
+            c_ops.append(np.sqrt(0.5 / t_phi) * qt.Qobj(np.diag([-1, 1] + [0] * (n - 2))))
+        super().__init__(omega_q=TWO_PI * self.f01, alpha=TWO_PI * self.anharmonicity,
+                         n_levels=n, c_ops=c_ops)
+        self._H0 = qt.Qobj(np.diag(TWO_PI * (e - e[0])))
+        n_op = tmon.matrixelement_table('n_operator', evals_count=n)
+        self._drive_op = qt.Qobj(n_op / abs(n_op[0, 1]))
 
-    def _drive(self, amplitude, phase=0.0):
-        """Rotating-frame drive, (A/2)(e^{i phase} n_up + h.c.), A in rad/ns."""
-        return 0.5 * amplitude * (np.exp(1j * phase) * self.n_up
-                                  + np.exp(-1j * phase) * self.n_up.dag())
+    @property
+    def H0(self):
+        return self._H0
 
-    def gaussian_pulse(self, angle=np.pi, sigma=5.0, phase=0.0, sample_rate=100.0):
-        """
-        Gaussian pulse (truncated at +-4 sigma) rotating the 0<->1 transition by
-        `angle`. Returns the time grid and the envelope A(t) in rad/ns, with
-        the area scaled so that  int A(t) dt * |n01| = angle.
-        """
-        t = np.arange(0, 8 * sigma, 1.0 / sample_rate)
-        env = np.exp(-0.5 * ((t - 4 * sigma) / sigma) ** 2)
-        env *= angle / (self.n01 * (env.sum() / sample_rate))
-        return t, env
+    @property
+    def drive_op(self):
+        return self._drive_op
 
-    def evolve(self, state, times, envelope=None, phase=0.0, e_ops=None):
+    def free_evolution(self, rho0, times, f_frame=None):
         """
-        mesolve from `state` over `times`; `envelope` is A(t) sampled on
-        `times` (None = free evolution).
+        Undriven mesolve from rho0 over `times`, in the frame rotating at
+        f_frame (GHz, default f01): H = H0 - 2 pi f_frame * N. H0 is
+        diagonal, so the frame only changes the phases of the coherences, not
+        the populations, and it removes the fast lab-frame precession that
+        would make microsecond-long evolutions slow. Returns the states.
         """
-        if envelope is None:
-            H = self.H0
-        else:
-            H = [self.H0, [self._drive(1.0, phase), envelope]]
-        return qt.mesolve(H, state, times, c_ops=self.c_ops, e_ops=e_ops or [],
-                          options={'nsteps': 100000})
+        f_frame = self.f01 if f_frame is None else f_frame
+        H = self.H0 - TWO_PI * f_frame * qt.num(self.n_levels)
+        return qt.mesolve(H, rho0, times, c_ops=self.c_ops,
+                          options={'nsteps': 100000}).states
 
-    def populations(self, states):
-        """Level populations of each state (ket or density matrix), shape (len(states), n)."""
-        return np.array([np.real(np.diag(qt.ket2dm(s).full() if s.isket else s.full()))
-                         for s in states])
-
-    def apply_pulse(self, angle=np.pi, sigma=5.0, sample_rate=100.0):
-        """pi-type pulse on |0>: returns times, level populations vs. time."""
-        t, env = self.gaussian_pulse(angle, sigma, sample_rate=sample_rate)
-        res = self.evolve(qt.basis(self.n, 0), t, env)
-        return t, self.populations(res.states)
-
-    def measure_t1(self, t_max=None, n_points=60):
+    def measure_t1(self, pulse=None, t_max=None, n_points=60):
         """
-        Prepare |1>, decay freely; fit P1 = exp(-t/T1). `t_max` in ns.
-        Returns (t1_fit [ns], t [ns], p1).
+        Excite |0> with `pulse` (default XGate(pi)), decay freely and fit
+        P1 = a exp(-t/T1). `t_max` in ns. Returns (t1_fit [ns], t [ns], p1).
         """
-        t1_guess = self.t1
-        t = np.linspace(0, t_max or 3 * t1_guess, n_points)
-        res = self.evolve(qt.basis(self.n, 1), t)
-        p1 = self.populations(res.states)[:, 1]
-        popt, _ = curve_fit(lambda x, tau: np.exp(-x / tau), t, p1, p0=[t1_guess])
+        pulse = XGate(np.pi) if pulse is None else pulse
+        _, traj = self.apply_gate(pulse)
+        t = np.linspace(0, t_max or 3 * self.t1, n_points)
+        states = self.free_evolution(qt.Qobj(traj[-1]), t)
+        p1 = np.array([np.real(s.full()[1, 1]) for s in states])
+        popt, _ = curve_fit(lambda x, tau, a: a * np.exp(-x / tau), t, p1, p0=[self.t1, p1[0]])
         return popt[0], t, p1
 
-    def measure_t2(self, t_max=None, detuning=None, n_points=200):
+    def measure_t2(self, pulse=None, t_max=None, detuning=None, n_points=500):
         """
-        Ramsey: pi/2 - wait - pi/2 with the drive detuned by `detuning` (GHz,
-        default: 20 fringes over the window) from the qubit; `t_max` in ns.
-        Fits P1 = b + a exp(-t/T2) cos(2 pi detuning t) and returns
+        Ramsey: pulse - wait t - pulse, with `pulse` (default XGate(pi/2))
+        driven `detuning` GHz above f01 (default: 20 fringes over the window);
+        `t_max` in ns. The pulse is simulated once, in the lab frame with
+        decoherence, as a superoperator S, and the wait is free evolution in
+        the frame rotating at the drive frequency. In that frame the second
+        pulse acts like the first (up to counter-rotating terms), so
+            P1(t) = <1| S( U_wait(t)[ R S(|0><0|) R^dag ] ) |1>,
+        with R moving the state after the first pulse into that frame.
+        Fits P1 = b + a exp(-t/T2) cos(2 pi detuning t + phi) and returns
         (t2_fit [ns], t [ns], p1).
         """
         t_max = t_max or 3 * self.t2
         detuning = detuning or 20.0 / t_max
-        probe = TransmonDynamics.__new__(TransmonDynamics)
-        probe.__dict__.update(self.__dict__)
-        probe.H0 = self.H0 + qt.Qobj(np.diag(TWO_PI * detuning * np.arange(self.n)))
+        pulse = XGate(np.pi / 2) if pulse is None else copy.copy(pulse)
+        f_drive = self.f01 + detuning
+        pulse.drive_frequency = TWO_PI * f_drive
+
+        # pulse on [0, duration], so the drive carrier and the frame agree at t = 0
+        H, t_pulse = self.driven_hamiltonian(pulse, t0=pulse.n_sigma * pulse.sigma)
+        S = qt.propagator(qt.QobjEvo(H, tlist=t_pulse), t_pulse[-1], c_ops=self.c_ops,
+                          options={'nsteps': 100000})
+        S = S if S.issuper else qt.to_super(S)
+
+        def apply_s(rho):
+            return qt.vector_to_operator(S * qt.operator_to_vector(rho))
+
+        R = (1j * TWO_PI * f_drive * t_pulse[-1] * qt.num(self.n_levels)).expm()
+        rho1 = R * apply_s(qt.ket2dm(self.ground_state)) * R.dag()
         t = np.linspace(0, t_max, n_points)
-        # ideal pi/2 rotations about x on the 0-1 subspace (no dissipation during them)
-        half = (-1j * (np.pi / 2) / (2 * self.n01) * (self.n_up + self.n_up.dag())).expm()
-        res = probe.evolve(half * qt.basis(self.n, 0), t)
-        p1 = self.populations([half * s * half.dag() for s in
-                               (qt.ket2dm(x) if x.isket else x for x in res.states)])[:, 1]
-        fit = lambda x, tau, a, b: b + a * np.exp(-x / tau) * np.cos(TWO_PI * detuning * x)
-        popt, _ = curve_fit(fit, t, p1, p0=[t_max / 3, -0.5, 0.5])
+        states = self.free_evolution(rho1, t, f_frame=f_drive)
+        p1 = np.array([np.real(apply_s(s).full()[1, 1]) for s in states])
+        fit = lambda x, tau, a, b, phi: b + a * np.exp(-x / tau) * np.cos(TWO_PI * detuning * x + phi)
+        popt, _ = curve_fit(fit, t, p1, p0=[t_max / 3, 0.5, 0.5, 0.0])
         return popt[0], t, p1
 
 
@@ -263,7 +300,12 @@ if __name__ == '__main__':
 
     t1_fit, t_t1, p_t1 = dyn.measure_t1()
     t2_fit, t_t2, p_t2 = dyn.measure_t2()
-    t_pulse, pops = dyn.apply_pulse(np.pi, sigma=5.0)
+
+    x_gate = XGate(np.pi, sigma=5.0)
+    t_pulse, traj = dyn.apply_gate(x_gate)
+    pops = dyn.populations(traj)
+    x_gate.frequency_spectrum(omega_q=dyn.f01)
+    # x_gate.plot_bloch_trajectory()
 
     fig, axes = plt.subplots(1, 3, figsize=(15, 4))
     axes[0].plot(t_pulse, pops[:, :3])
@@ -278,12 +320,14 @@ if __name__ == '__main__':
 
     report = '\n'.join([
         f'Transmon: EJ = {ej} GHz, EC = {ec} GHz (EJ/EC = {ej / ec:.0f})',
-        f'  f01 = {dyn.f01:.4f} GHz, anharmonicity = {dyn.alpha * 1e3:.1f} MHz',
+        f'  f01 = {dyn.f01:.4f} GHz, anharmonicity = {dyn.anharmonicity * 1e3:.1f} MHz',
         '',
         'Coherence (scqubits noise models):',
         f'  T1 = {times["t1"] / 1e3:.2f} us, T_phi = {times["t_phi"] / 1e3:.2f} us, '
         f'T2 = {times["t2"] / 1e3:.2f} us',
         f'  simulated fits: T1 = {t1_fit / 1e3:.2f} us, T2 = {t2_fit / 1e3:.2f} us',
+        '',
+        *t1_channel_report(tmon),
         '',
         'pi pulse final populations |0>,|1>,|2>,...:',
         f'  {np.round(pops[-1], 5)}',
@@ -293,6 +337,9 @@ if __name__ == '__main__':
         f'  f_res(|0>) = {disp["f_res_0"]:.5f} GHz, f_res(|1>) = {disp["f_res_1"]:.5f} GHz',
         f'  dispersive shift chi = {disp["chi"] * 1e3:.2f} MHz',
         f'  Purcell-limited T1 = {purcell_t1(g, delta, kappa) / 1e3:.1f} us',
+        '      Purcell decay: the qubit is slightly hybridized with the resonator, so it',
+        '      leaks energy out through the resonator\'s output line at kappa (g/delta)^2.',
+        '      Not included in the T1 above (not a scqubits noise channel).',
         ''])
     print(report)
     print('report saved to', save_text(report, 'scq_report'))

@@ -261,7 +261,8 @@ class DrivePulse:
         sz = qt.projection(n, 0, 0) - qt.projection(n, 1, 1)
         p01 = qt.projection(n, 0, 0) + qt.projection(n, 1, 1)
 
-        states = [qt.Qobj(row.reshape(-1, 1)) for row in psi_traj]
+        # kets (closed system) or density matrices (open system)
+        states = [qt.Qobj(row if row.ndim == 2 else row.reshape(-1, 1)) for row in psi_traj]
         # dividing by <P01> renormalizes the projection onto the qubit subspace
         # (population leaked to |2>, ... is discarded)
         pop = np.real(qt.expect(p01, states))
@@ -324,21 +325,21 @@ class DrivePulse:
             self.generate_drive_signal(omega_q, alpha=alpha)
         
         signal_ft = np.fft.fftshift(np.fft.fft(self.total_modulated_signal, n=n_fft))
-        freqs = 2 * np.pi * np.fft.fftshift(
+        freqs = np.fft.fftshift(
             np.fft.fftfreq(n_fft, d=1.0 / self.sample_rate))
         if plot:
             w_d = self.drive_frequency if self.drive_frequency is not None else omega_q
-            half_width = 10.0 / self.sigma  # ~10 spectral widths either side
+            # half_width = 10.0 / self.sigma  # ~10 spectral widths either side
             plt.plot(freqs, np.abs(signal_ft))
-            plt.xlim(-(abs(w_d) + half_width), abs(w_d) + half_width)  # both peaks, +/-w_d
+            plt.xlim(-(abs(w_d)*2), abs(w_d)*2)  
             plt.axvline(omega_q if omega_q is not None else w_d, color='gray', linestyle='--',
-                        label=r'$\omega_q$')
+                        label=rf'$\omega_q = {w_d:.3f}$')
             if omega_q is not None and alpha is not None:
                 plt.axvline(omega_q + alpha, color='red', linestyle='--',
                             label=r'$\omega_q + \alpha$ (1$\leftrightarrow$2)')
             plt.legend()
-            plt.xlabel('Angular frequency (arb. units)')
-            plt.ylabel('Magnitude')
+            plt.xlabel('Angular frequency (GHz)')
+            plt.ylabel('Magnitude (arb. units)')
             plt.title(f'{self.__class__.__name__} frequency spectrum')
             plt.grid()
             save_and_show(save_as)
@@ -433,13 +434,19 @@ class TransmonQubit:
     omega_q is the 0<->1 transition frequency and alpha < 0 is the
     anharmonicity, which separates the 1<->2 transition from the 0<->1
     one and is what makes single-qubit gates imperfect (leakage into |2>).
+
+    By default the system is closed (c_ops empty, apply_gate uses sesolve).
+    Pass Lindblad collapse operators as c_ops to make it open (mesolve).
+    Subclasses (e.g. scqubits_tools.TransmonDynamics) can override H0 and
+    drive_op to swap the Duffing model for another Hamiltonian.
     """
 
-    def __init__(self, omega_q=5.0, alpha=-0.3, n_levels=4, hbar=1.0):
+    def __init__(self, omega_q=5.0, alpha=-0.3, n_levels=4, hbar=1.0, c_ops=None):
         self.omega_q = omega_q
         self.alpha = alpha
         self.n_levels = n_levels
         self.hbar = hbar
+        self.c_ops = list(c_ops) if c_ops else []
 
     @property
     def energies(self):
@@ -462,41 +469,77 @@ class TransmonQubit:
     def ground_state(self):
         return qt.basis(self.n_levels, 0)
 
-    def apply_gate(self, pulse, psi0=None, t0=0.0, rwa=False):
+    @property
+    def drive_op(self):
+        """Operator the drive couples to (a + a_dag for the Duffing model)."""
+        return self.a + self.a_dag
+
+    def driven_hamiltonian(self, pulse, t0=0.0, rwa=False, H0=None, drive_op=None):
         """
-        Propagate a state through a drive pulse with qutip.sesolve on the
-        full lab-frame Hamiltonian H0 + Omega(t)*cos(w_d t+phase)*(a+a_dag)
-        - no RWA, no 2-level truncation, so leakage out of the qubit
-        subspace (into |2>, etc.) shows up naturally. The drive is passed
-        to qutip as an array sampled on the pulse's own time grid (set by
-        its sample_rate).
+        Lab-frame Hamiltonian H0 + Omega(t)*cos(w_d t+phase)*drive_op for
+        `pulse` (qutip list format) and the pulse's time grid. H0 and
+        drive_op default to this qubit's own, so a Hamiltonian built
+        elsewhere can be passed in. The pulse's resonance and DRAG still use
+        self.omega_q / self.alpha, and its area equals its rotation angle
+        only if <0|drive_op|1> = 1.
 
-        psi0 may be a qutip ket or a plain vector (default: ground state).
+        rwa=True keeps only the co-rotating terms: drive_op is split into its
+        part above the diagonal L (= a for a + a_dag) and L^dag, giving
+        (1/2) * (c* e^{-i theta} L^dag + c e^{i theta} L).
+        """
+        H0 = self.H0 if H0 is None else H0
+        drive_op = self.drive_op if drive_op is None else drive_op
+        pulse.generate_drive_signal(self.omega_q, t0, self.alpha)
+        t_vals = pulse.time_array(t0)
 
-        Returns the time grid and the full complex state at every step
-        (shape (len(t_vals), n_levels)), so callers can get populations
-        (abs(psi_traj)**2), the final state (psi_traj[-1]), or the relative
-        phase between levels (needed for a Bloch-sphere trajectory).
+        if rwa:
+            lower = qt.Qobj(np.triu(drive_op.full(), 1), dims=drive_op.dims)
+            c, theta = pulse.complex_envelope, pulse.drive_phase
+            H = [H0,
+                 [lower.dag(), 0.5 * np.conj(c) * np.exp(-1j * theta)],
+                 [lower,       0.5 * c * np.exp(1j * theta)]]
+        else:
+            H = [H0, [drive_op, pulse.total_modulated_signal]]
+        return H, t_vals
+
+    def apply_gate(self, pulse, psi0=None, t0=0.0, rwa=False, H0=None, drive_op=None,
+                   c_ops=None):
+        """
+        Propagate a state through a drive pulse on the full lab-frame
+        Hamiltonian H0 + Omega(t)*cos(w_d t+phase)*drive_op (see
+        driven_hamiltonian) - no RWA unless rwa=True, no 2-level truncation,
+        so leakage out of the qubit subspace (into |2>, etc.) shows up
+        naturally. The drive is passed to qutip as an array sampled on the
+        pulse's own time grid (set by its sample_rate).
+
+        H0, drive_op, c_ops : optional overrides of this qubit's own. With no
+        collapse operators (the default) and a ket, the system is closed and
+        qutip.sesolve is used; otherwise qutip.mesolve.
+
+        psi0 may be a qutip ket / density matrix or a plain vector (default:
+        ground state).
+
+        Returns the time grid and the full complex state at every step:
+        kets, shape (len(t_vals), n_levels), for a closed system, or density
+        matrices, shape (len(t_vals), n_levels, n_levels), for an open one.
+        Callers can get populations (self.populations), the final state
+        (psi_traj[-1]), or the relative phase between levels (needed for a
+        Bloch-sphere trajectory).
         """
         if psi0 is None:
             psi0 = self.ground_state
         elif not isinstance(psi0, qt.Qobj):
             psi0 = qt.Qobj(np.asarray(psi0, dtype=complex).reshape(-1, 1))
+        c_ops = self.c_ops if c_ops is None else c_ops
 
-        pulse.generate_drive_signal(self.omega_q, t0, self.alpha)
-        t_vals = pulse.time_array(t0)
-
-        if rwa:
-            # keep only the co-rotating terms: (1/2) * (c* e^{-i theta} a_dag + c e^{i theta} a)
-            c, theta = pulse.complex_envelope, pulse.drive_phase
-            H = [self.H0,
-                 [self.a_dag, 0.5 * np.conj(c) * np.exp(-1j * theta)],
-                 [self.a,     0.5 * c * np.exp(1j * theta)]]
+        H, t_vals = self.driven_hamiltonian(pulse, t0, rwa, H0, drive_op)
+        options = {'store_states': True, 'nsteps': 100000}
+        if c_ops or psi0.isoper:
+            result = qt.mesolve(H, psi0, t_vals, c_ops=c_ops, options=options)
+            psi_traj = np.array([state.full() for state in result.states])
         else:
-            H = [self.H0, [self.a + self.a_dag, pulse.total_modulated_signal]]
-        result = qt.sesolve(H, psi0, t_vals,
-                            options={'store_states': True, 'nsteps': 100000})
-        psi_traj = np.array([state.full().ravel() for state in result.states])
+            result = qt.sesolve(H, psi0, t_vals, options=options)
+            psi_traj = np.array([state.full().ravel() for state in result.states])
         return t_vals, psi_traj
 
 
@@ -504,6 +547,8 @@ class TransmonQubit:
         """Population of each level at every time step (shape (n_steps, n_levels))."""
         if not isinstance(psi_traj, np.ndarray):
             raise TypeError("psi_traj must be a numpy array")
+        if psi_traj.ndim == 3:  # density matrices: the diagonals
+            return np.real(np.diagonal(psi_traj, axis1=1, axis2=2))
         return np.abs(psi_traj)**2
 
 
