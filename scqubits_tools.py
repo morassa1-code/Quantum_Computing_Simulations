@@ -16,6 +16,31 @@ scq.set_units('GHz')  # energies/frequencies in GHz, coherence times in ns
 TWO_PI = 2 * np.pi
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
 
+T1_CHANNEL_INFO = {
+    't1_capacitive':
+        'dielectric loss: the qubit\'s electric field reaches lossy materials (surface oxides,\n'
+        '      substrate, two-level-system defects in the interfaces), which absorb its energy.\n'
+        '      Set by the capacitor\'s quality factor Q_cap (scqubits default ~1e6).',
+    't1_charge_impedance':
+        'loss into a 50 Ohm charge line: the qubit\'s charge couples to the impedance of a\n'
+        '      drive/charge line and emits photons into it. scqubits assumes direct coupling\n'
+        '      to the line, which gives an unphysically short T1 for a transmon\n'
+        '      (real lines are coupled through a tiny capacitance).',
+}
+
+T_PHI_CHANNEL_INFO = {
+    'tphi_flux_noise':
+        'dephasing from 1/f flux noise: the qubit\'s frequency fluctuates due to\n'
+        '      magnetic flux noise in the SQUID loop. scqubits assumes a 1/f spectrum\n'
+        '      with amplitude A_phi = 1e-6 Phi_0, which is typical for superconducting\n'
+        '      qubits. The dephasing rate is proportional to the slope of f01 vs flux.',
+    'tphi_charge_noise':
+        'dephasing from 1/f charge noise: the qubit\'s frequency fluctuates due to\n'
+        '      charge noise on the island. scqubits assumes a 1/f spectrum with amplitude\n'
+        '      A_ng = 1e-3 e, which is typical for superconducting qubits. The dephasing\n'
+        '      rate is proportional to the slope of f01 vs ng.',
+}
+
 
 def make_transmon(ej=20.0, ec=0.25, ng=0.0, ncut=30, n_levels=4):
     """
@@ -34,127 +59,6 @@ def make_transmon(ej=20.0, ec=0.25, ng=0.0, ncut=30, n_levels=4):
     return scq.Transmon(EJ=ej, EC=ec, ng=ng, ncut=ncut, truncated_dim=n_levels)
 
 
-def make_resonator(f_res=7.0, n_res=12):
-    """scqubits Oscillator (the readout resonator).
-    f_res : float
-        Resonator frequency in GHz.
-    n_res : int
-        Truncation level for the resonator.
-    """
-    return scq.Oscillator(E_osc=f_res, truncated_dim=n_res)
-
-
-def transmon_resonator(tmon, resonator, g):
-    """
-    Hamiltonian (qutip, GHz) of the transmon coupled to the resonator,
-    H = H_transmon + H_resonator + g * n_transmon * (a + a_dag)
-    H = H_q ⊗ 𝟙 + 𝟙 ⊗ H_r + g · n ⊗ (a + a†),
-    written in the product of the two eigenbases (exact transmon energies and
-    charge-operator matrix elements, so the coupling is not restricted to the
-    qubit's two levels). 
-    n_op is an operator counting the Cooper pairs that have tunnelled 
-    across the Josephson junction.
-    tmon : scqubits.Transmon
-        The transmon object.
-    resonator : scqubits.Oscillator
-        The resonator object.
-    g : float
-        Coupling strength in GHz.
-    """
-    n_q, n_r = tmon.truncated_dim, resonator.truncated_dim
-    n_op = qt.Qobj(tmon.matrixelement_table('n_operator', evals_count=n_q))
-    a = qt.Qobj(resonator.annihilation_operator())  # Fock basis = eigenbasis
-    h_q = qt.Qobj(np.diag(tmon.eigenvals(n_q)))
-    h_r = qt.Qobj(np.diag(resonator.eigenvals(n_r)))
-    return (qt.tensor(h_q, qt.qeye(n_r)) + qt.tensor(qt.qeye(n_q), h_r)
-            + g * qt.tensor(n_op, a + a.dag()))
-
-
-def dispersive_shift(H, n_q, n_r):
-    """
-    Dressed frequencies (GHz) from the eigenstates of `H` (as built by
-    transmon_resonator), labelled by their largest overlap with the bare
-    |qubit level, photon number>: 'f01' (resonator in |0>), 'f_res_0' /
-    'f_res_1' (resonator frequency with the qubit in |0> / |1>) and the
-    dispersive shift 'chi' = (f_res_1 - f_res_0) / 2.
-    """
-    evals, evecs = H.eigenstates() # Diagonalizes the entire coupled system Hamiltonian
-
-    def dressed(j, k):
-        bare = qt.tensor(qt.basis(n_q, j), qt.basis(n_r, k))
-        return evals[int(np.argmax([abs(bare.overlap(v)) for v in evecs]))]
-
-    e00, e10, e01, e11 = dressed(0, 0), dressed(1, 0), dressed(0, 1), dressed(1, 1)
-    f_res_0, f_res_1 = e01 - e00, e11 - e10
-    return {'f01': e10 - e00, 'f_res_0': f_res_0, 'f_res_1': f_res_1,
-            'chi': 0.5 * (f_res_1 - f_res_0)}
-
-
-def purcell_t1(g, delta, kappa):
-    """
-    Purcell-limited T1 (ns) of a qubit detuned by `delta` (GHz) from a
-    resonator of linewidth `kappa` (GHz, angular rate/2pi) coupled with g (GHz):
-    gamma = kappa * (g/delta)^2, in angular units. That is in the dispersive shift regime, 
-    where the qubit-resonator detuning is much larger than the coupling strength. 
-    """
-    return 1.0 / (TWO_PI * kappa * (g / delta) ** 2)
-
-# Read up to here
-
-def coherence_times(tmon, noise_channels=None):
-    """
-    T1, T_phi and T2 of the 0<->1 transition from scqubits' noise models.
-    All returned values are in ns (1 us = 1e3 ns), because of set_units('GHz').
-    `noise_channels` picks channels by scqubits name (see
-    tmon.supported_noise_channels()); by default every supported channel but
-    't1_charge_impedance', which gives an unphysical T1 of ~0.2 ns for a
-    transmon. 1/T2 = 1/(2 T1) + 1/T_phi.
-    """
-    supported = tmon.supported_noise_channels()
-    if noise_channels is None:
-        noise_channels = [c for c in supported if c != 't1_charge_impedance']
-    wanted = [c for c in noise_channels if c in supported]
-    t1_channels = [c for c in wanted if c.startswith('t1')]
-    tphi_channels = [c for c in wanted if c.startswith('tphi')]
-
-    t1 = tmon.t1_effective(noise_channels=t1_channels) if t1_channels else np.inf
-    rate_phi = sum(1.0 / getattr(tmon, c)() for c in tphi_channels)
-    t_phi = 1.0 / rate_phi if rate_phi else np.inf
-    t2 = 1.0 / (0.5 / t1 + 1.0 / t_phi)
-    return {'t1': t1, 't_phi': t_phi, 't2': t2}
-
-
-T1_CHANNEL_INFO = {
-    't1_capacitive':
-        'dielectric loss: the qubit\'s electric field reaches lossy materials (surface oxides,\n'
-        '      substrate, two-level-system defects in the interfaces), which absorb its energy.\n'
-        '      Set by the capacitor\'s quality factor Q_cap (scqubits default ~1e6).',
-    't1_charge_impedance':
-        'loss into a 50 Ohm charge line: the qubit\'s charge couples to the impedance of a\n'
-        '      drive/charge line and emits photons into it. scqubits assumes direct coupling\n'
-        '      to the line, giving an unphysical ~0.1 ns for a transmon, so it is excluded\n'
-        '      by default (real lines are coupled through a tiny capacitance).',
-}
-
-
-def t1_channel_report(tmon, noise_channels=None):
-    """
-    Lines for the report: T1 of each scqubits T1 channel of `tmon`, with a
-    short explanation of its physical cause (T1_CHANNEL_INFO) and whether it
-    is included in the effective T1 (same default selection as
-    coherence_times).
-    """
-    supported = [c for c in tmon.supported_noise_channels() if c.startswith('t1')]
-    if noise_channels is None:
-        noise_channels = [c for c in supported if c != 't1_charge_impedance']
-    lines = ['T1 noise channels (1/T1 = sum of the included rates):']
-    for c in supported:
-        status = 'included' if c in noise_channels else 'excluded'
-        lines.append(f'  {c}: T1 = {getattr(tmon, c)() / 1e3:.4g} us ({status})')
-        lines.append(f'      {T1_CHANNEL_INFO.get(c, "no description")}')
-    return lines
-
-
 class TransmonDynamics(TransmonQubit):
     """
     A scqubits Transmon as a simulation_tools TransmonQubit, so the pulses
@@ -167,38 +71,177 @@ class TransmonDynamics(TransmonQubit):
         H0 = sum_j 2 pi (E_j - E_0) |j><j|,    drive_op = n / |<0|n|1>|
 
     n is the charge operator in the eigenbasis, normalized so a pulse's area
-    is still its rotation angle on 0<->1. T1 and pure dephasing are Lindblad
-    operators (c_ops), so apply_gate runs mesolve and returns density matrices.
+    is still its rotation angle on 0<->1. T1 and pure dephasing (from the
+    scqubits noise models, see `coherence_times`) are Lindblad operators
+    (c_ops), so apply_gate runs mesolve and returns density matrices.
+
+    Optionally the qubit (its 0-1 transition, f01) is coupled to a readout
+    resonator; the `readout_*`, `chi`, `n_crit` and `purcell_t1` members then
+    describe the Jaynes-Cummings model and its dispersive approximation.
     """
 
-    def __init__(self, tmon, t1=np.inf, t_phi=np.inf):
-        """tmon: scqubits.Transmon; t1, t_phi: ns (np.inf = channel off)."""
+    # ------------------------------------------------------------------ setup
+
+    def __init__(self, tmon, f_res=None, g=None, kappa=None, n_res=12, noise_channels=None):
+        """
+        tmon : scqubits.Transmon
+        f_res, g, kappa : readout resonator frequency, qubit-resonator coupling
+            and linewidth (all GHz). Only needed for the readout methods.
+        n_res : resonator Fock-space truncation.
+        noise_channels : scqubits noise-channel names to include (default: all
+            the transmon supports, see tmon.supported_noise_channels()).
+        """
         n = tmon.truncated_dim
         e = tmon.eigenvals(n)
+        self.tmon = tmon
+        self.f_res = f_res
+        self.g = g
+        self.kappa = kappa
+        self.n_res = n_res
         self.f01 = e[1] - e[0]  # GHz
         self.anharmonicity = (e[2] - e[1]) - self.f01  # GHz
-        self.t1, self.t_phi = t1, t_phi
-        self.t2 = 1.0 / (0.5 / t1 + 1.0 / t_phi)
+        self.noise_channels = self._select_channels(noise_channels)
+        self.t1, self.t_phi, self.t2 = self.coherence_times()
+
         c_ops = []
-        if np.isfinite(t1):
-            c_ops += [np.sqrt(1.0 / t1) * qt.basis(n, j - 1) * qt.basis(n, j).dag()
-                      * np.sqrt(j) for j in range(1, n)]
-        if np.isfinite(t_phi):
+        if np.isfinite(self.t1):
+            c_ops += [np.sqrt(j / self.t1) * qt.basis(n, j - 1) * qt.basis(n, j).dag()
+                      for j in range(1, n)]
+        if np.isfinite(self.t_phi):
             # dephasing of the 0-1 coherence at rate 1/t_phi
-            c_ops.append(np.sqrt(0.5 / t_phi) * qt.Qobj(np.diag([-1, 1] + [0] * (n - 2))))
+            c_ops.append(np.sqrt(0.5 / self.t_phi) * qt.Qobj(np.diag([-1, 1] + [0] * (n - 2))))
         super().__init__(omega_q=TWO_PI * self.f01, alpha=TWO_PI * self.anharmonicity,
                          n_levels=n, c_ops=c_ops)
-        self._H0 = qt.Qobj(np.diag(TWO_PI * (e - e[0])))
+        self._H0 = qt.Qobj(np.diag(TWO_PI * (e - e[0]))) # ground state is the reference energy, so H0|0> = 0
         n_op = tmon.matrixelement_table('n_operator', evals_count=n)
-        self._drive_op = qt.Qobj(n_op / abs(n_op[0, 1]))
+        # self._drive_op = qt.Qobj(n_op / abs(n_op[0, 1]))
 
     @property
     def H0(self):
         return self._H0
 
+    # @property
+    # def drive_op(self):
+    #     return self._drive_op
+
+    # -------------------------------------------------------------- coherence
+
+    def _select_channels(self, noise_channels):
+        supported = self.tmon.supported_noise_channels()
+        if noise_channels is None:  # scqubits' default: every channel but t1_charge_impedance
+            return [c for c in supported if c != 't1_charge_impedance']
+        return [c for c in noise_channels if c in supported]
+
+    def coherence_times(self):
+        """
+        (T1, T_phi, T2) in ns of the 0<->1 transition from the scqubits noise
+        models selected at construction (np.inf if no channel contributes);
+        1/T2 = 1/(2 T1) + 1/T_phi.
+        """
+        t1_channels = [c for c in self.noise_channels if c.startswith('t1')]
+        tphi_channels = [c for c in self.noise_channels if c.startswith('tphi')]
+        t1 = self.tmon.t1_effective(noise_channels=t1_channels) if t1_channels else np.inf
+        rate_phi = sum(1.0 / getattr(self.tmon, c)() for c in tphi_channels)
+        t_phi = 1.0 / rate_phi if rate_phi else np.inf
+        return t1, t_phi, 1.0 / (0.5 / t1 + 1.0 / t_phi)
+
+    def noise_channel_report(self):
+        """Report lines: T1 of every scqubits T1 channel, its physical cause and whether it is included."""
+        lines = ['T1 noise channels (1/T1 = sum of the included rates):']
+        for c in (c for c in self.tmon.supported_noise_channels() if c.startswith('t1')):
+            status = 'included' if c in self.noise_channels else 'excluded'
+            lines.append(f'  {c}: T1 = {getattr(self.tmon, c)() / 1e3:.4g} us ({status})')
+            lines.append(f'      {T1_CHANNEL_INFO.get(c, "no description")}')
+        for c in (c for c in self.tmon.supported_noise_channels() if c.startswith('tphi')):
+            status = 'included' if c in self.noise_channels else 'excluded'
+            lines.append(f'  {c}: T_phi = {getattr(self.tmon, c)() / 1e3:.4g} us ({status})')
+            lines.append(f'      {T_PHI_CHANNEL_INFO.get(c, "no description")}')
+        return lines
+
+    # ---------------------------------------------------------------- readout
+
     @property
-    def drive_op(self):
-        return self._drive_op
+    def delta(self):
+        """Qubit-resonator detuning Delta_qr = f01 - f_res (GHz)."""
+        if None in (self.f_res, self.g):
+            raise ValueError('f_res and g must be given to TransmonDynamics for readout quantities')
+        return self.f01 - self.f_res
+
+    @property
+    def chi(self):
+        """Dispersive shift chi = g^2 / Delta_qr (GHz)."""
+        return self.g ** 2 / self.delta
+
+    @property
+    def n_crit(self):
+        """n_crit = Delta_qr^2 / (4 g^2): the dispersive approximation needs n << n_crit."""
+        return self.delta ** 2 / (4 * self.g ** 2)
+
+    def readout_hamiltonian(self, dispersive=False):
+        """
+        Qubit ⊗ resonator Hamiltonian (qutip, GHz, hbar = 1) with the qubit
+        reduced to its two levels, in the convention of the readout notes:
+        basis(2, 0) = |g>, basis(2, 1) = |e>, sigma_z|g> = +|g>.
+
+        Exact Jaynes-Cummings (dispersive=False):
+            H = f_r a†a - (f_q / 2) sigma_z + g (a† sigma_- + a sigma_+)
+        Its exchange between |e, n> and |g, n+1> is what the dispersive
+        (second order in g/Delta_qr) effective Hamiltonian removes:
+            H = (f_r - chi sigma_z) a†a - (f_q + chi) / 2 sigma_z,   chi = g^2 / Delta_qr
+        which commutes with sigma_z: the qubit state only selects the resonator
+        frequency f_r -/+ chi (g/e). Valid for g sqrt(n+1) << |Delta_qr|.
+        """
+        self.delta  # check that f_res and g are given
+        sz, sm = qt.sigmaz(), qt.destroy(2)  # sigma_minus = |g><e|
+        a = qt.destroy(self.n_res)
+        n_op, id_q, id_r = a.dag() * a, qt.qeye(2), qt.qeye(self.n_res)
+        if dispersive:
+            return (qt.tensor(id_q, self.f_res * n_op) - self.chi * qt.tensor(sz, n_op)
+                    - 0.5 * (self.f01 + self.chi) * qt.tensor(sz, id_r))   # dispersive regime Hamiltonian, valid for g sqrt(n+1) << |Delta_qr|
+        return (qt.tensor(id_q, self.f_res * n_op) - 0.5 * self.f01 * qt.tensor(sz, id_r)
+                + self.g * (qt.tensor(sm, a.dag()) + qt.tensor(sm.dag(), a)))  # full Jaynes-Cummings Hamiltonian
+
+    @staticmethod
+    def dressed_frequencies(H):
+        """
+        Dressed frequencies (GHz) from the eigenstates of a qubit ⊗ resonator
+        Hamiltonian `H`, labelled by their largest overlap with the bare
+        |qubit level j, photon number k>: 'f01' (resonator in |0>), 'f_res_0' /
+        'f_res_1' (resonator frequency with the qubit in level 0 / 1) and the
+        dispersive shift 'chi' = (f_res_1 - f_res_0) / 2.
+        """
+        n_q, n_r = H.dims[0]
+        evals, evecs = H.eigenstates()
+
+        def dressed(j, k):
+            bare = qt.tensor(qt.basis(n_q, j), qt.basis(n_r, k))
+            return evals[int(np.argmax([abs(bare.overlap(v)) for v in evecs]))] # largest overlap with the bare state |j, k>
+
+        e00, e10, e01, e11 = dressed(0, 0), dressed(1, 0), dressed(0, 1), dressed(1, 1)
+        f_res_0, f_res_1 = e01 - e00, e11 - e10
+        return {'f01': e10 - e00, 'f_res_0': f_res_0, 'f_res_1': f_res_1,
+                'chi': 0.5 * (f_res_1 - f_res_0)}
+
+    def readout_summary(self):
+        """
+        Dressed frequencies of the exact Jaynes-Cummings model ('jc') and of the
+        dispersive Hamiltonian ('disp'), next to the analytic prediction
+        ('analytic': f_r -/+ chi for g/e, f_q + chi for the qubit), and n_crit.
+        """
+        return {'jc': self.dressed_frequencies(self.readout_hamiltonian()),
+                'disp': self.dressed_frequencies(self.readout_hamiltonian(dispersive=True)),
+                'analytic': {'f01': self.f01 + self.chi, 'f_res_0': self.f_res - self.chi,
+                             'f_res_1': self.f_res + self.chi, 'chi': self.chi},
+                'n_crit': self.n_crit}
+
+    def purcell_t1(self):
+        """
+        Purcell-limited T1 (ns): gamma = kappa (g/Delta)^2 (angular units, kappa
+        in GHz as a rate/2pi), valid in the dispersive regime |Delta| >> g.
+        """
+        return 1.0 / (TWO_PI * self.kappa * (self.g / self.delta) ** 2)
+
+    # --------------------------------------------------------------- dynamics
 
     def free_evolution(self, rho0, times, f_frame=None):
         """
@@ -220,7 +263,7 @@ class TransmonDynamics(TransmonQubit):
         fit curve on t).
         """
         pulse = XGate(np.pi) if pulse is None else pulse
-        _, traj = self.apply_gate(pulse)
+        _, traj = self.apply_gate(pulse, psi0=qt.ket2dm(self.ground_state))
         t = np.linspace(0, t_max or 3 * self.t1, n_points)
         states = self.free_evolution(qt.Qobj(traj[-1]), t)
         p1 = np.array([np.real(s.full()[1, 1]) for s in states])
@@ -269,21 +312,19 @@ class TransmonDynamics(TransmonQubit):
         return tau, t, p1, fit(t, *popt), (b - decay, b + decay)
 
 
-def save_fig(name, dpi=150):
-    """Save the current figure to DATA_DIR/name (.png) and close it."""
+def save_output(name, text=None, dpi=150):
+    """
+    Save to DATA_DIR/name: `text` as .txt if given, otherwise the current
+    matplotlib figure as .png (then closed). Returns the path.
+    """
     os.makedirs(DATA_DIR, exist_ok=True)
-    path = os.path.join(DATA_DIR, name if '.' in name else name + '.png')
-    plt.savefig(path, dpi=dpi, bbox_inches='tight')
-    plt.close()
-    return path
-
-
-def save_text(text, name):
-    """Save text to DATA_DIR/name (.txt)."""
-    os.makedirs(DATA_DIR, exist_ok=True)
-    path = os.path.join(DATA_DIR, name if '.' in name else name + '.txt')
-    with open(path, 'w', encoding='utf-8') as f:
-        f.write(text)
+    path = os.path.join(DATA_DIR, name if '.' in name else name + ('.txt' if text is not None else '.png'))
+    if text is None:
+        plt.savefig(path, dpi=dpi, bbox_inches='tight')
+        plt.close()
+    else:
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(text)
     return path
 
 
@@ -296,12 +337,9 @@ if __name__ == '__main__':
     g = 0.1
 
     tmon = make_transmon(ej, ec)
-    resonator = make_resonator(f_res)
-    disp = dispersive_shift(transmon_resonator(tmon, resonator, g),
-                            tmon.truncated_dim, resonator.truncated_dim)
-    times = coherence_times(tmon)
-    dyn = TransmonDynamics(tmon, times['t1'], times['t_phi'])
-    delta = f_res - dyn.f01
+    dyn = TransmonDynamics(tmon, f_res=f_res, g=g, kappa=kappa)
+    readout = dyn.readout_summary()
+    disp = readout['jc']
 
     t1_fit, t_t1, p_t1, fit_t1 = dyn.measure_t1()
     t2_fit, t_t2, p_t2, fit_t2, env_t2 = dyn.measure_t2()
@@ -327,31 +365,33 @@ if __name__ == '__main__':
     axes[2].set(xlabel='t (us)', ylabel='P(|1>)', title='Ramsey')
     axes[2].legend()
     plt.tight_layout()
-    fig_path = save_fig('scq_dynamics')
+    fig_path = save_output('scq_dynamics')
 
     report = '\n'.join([
         f'Transmon: EJ = {ej} GHz, EC = {ec} GHz (EJ/EC = {ej / ec:.0f})',
         f'  f01 = {dyn.f01:.4f} GHz, anharmonicity = {dyn.anharmonicity * 1e3:.1f} MHz',
         '',
         'Coherence (scqubits noise models):',
-        f'  T1 = {times["t1"] / 1e3:.2f} us, T_phi = {times["t_phi"] / 1e3:.2f} us, '
-        f'T2 = {times["t2"] / 1e3:.2f} us',
+        f'  T1 = {dyn.t1 / 1e3:.2f} us, T_phi = {dyn.t_phi / 1e3:.2f} us, '
+        f'T2 = {dyn.t2 / 1e3:.2f} us',
         f'  simulated fits: T1 = {t1_fit / 1e3:.2f} us, T2 = {t2_fit / 1e3:.2f} us',
         '',
-        *t1_channel_report(tmon),
+        *dyn.noise_channel_report(),
         '',
         'pi pulse final populations |0>,|1>,|2>,...:',
         f'  {np.round(pops[-1], 5)}',
         '',
         f'Resonator: f_res = {f_res} GHz, g = {g * 1e3:.0f} MHz, kappa = {kappa * 1e3:.1f} MHz',
-        f'  detuning = {delta * 1e3:.0f} MHz, dressed f01 = {disp["f01"]:.4f} GHz',
+        f'  detuning = {dyn.delta * 1e3:.0f} MHz, dressed f01 = {disp["f01"]:.4f} GHz',
         f'  f_res(|0>) = {disp["f_res_0"]:.5f} GHz, f_res(|1>) = {disp["f_res_1"]:.5f} GHz',
-        f'  dispersive shift chi = {disp["chi"] * 1e3:.2f} MHz',
-        f'  Purcell-limited T1 = {purcell_t1(g, delta, kappa) / 1e3:.1f} us',
+        f'  dispersive shift chi: exact JC = {disp["chi"] * 1e3:.3f} MHz, '
+        f'H_disp = {readout["disp"]["chi"] * 1e3:.3f} MHz, g^2/Delta = {readout["analytic"]["chi"] * 1e3:.3f} MHz',
+        f'  critical photon number n_crit = Delta^2/(4 g^2) = {readout["n_crit"]:.0f}',
+        f'  Purcell-limited T1 = {dyn.purcell_t1() / 1e3:.1f} us',
         '      Purcell decay: the qubit is slightly hybridized with the resonator, so it',
         '      leaks energy out through the resonator\'s output line at kappa (g/delta)^2.',
         '      Not included in the T1 above (not a scqubits noise channel).',
         ''])
     print(report)
-    print('report saved to', save_text(report, 'scq_report'))
+    print('report saved to', save_output('scq_report', text=report))
     print('figure saved to', fig_path)
