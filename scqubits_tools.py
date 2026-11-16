@@ -29,16 +29,10 @@ T1_CHANNEL_INFO = {
 }
 
 T_PHI_CHANNEL_INFO = {
-    'tphi_flux_noise':
-        'dephasing from 1/f flux noise: the qubit\'s frequency fluctuates due to\n'
-        '      magnetic flux noise in the SQUID loop. scqubits assumes a 1/f spectrum\n'
-        '      with amplitude A_phi = 1e-6 Phi_0, which is typical for superconducting\n'
-        '      qubits. The dephasing rate is proportional to the slope of f01 vs flux.',
-    'tphi_charge_noise':
-        'dephasing from 1/f charge noise: the qubit\'s frequency fluctuates due to\n'
-        '      charge noise on the island. scqubits assumes a 1/f spectrum with amplitude\n'
-        '      A_ng = 1e-3 e, which is typical for superconducting qubits. The dephasing\n'
-        '      rate is proportional to the slope of f01 vs ng.',
+    'tphi_1_over_f_cc':
+        '1/f dephasing time (or rate) due to critical current noise.\n',
+    'tphi_1_over_f_ng':
+        '1/f dephasing time (or rate) due to charge noise\n'
 }
 
 
@@ -201,6 +195,36 @@ class TransmonDynamics(TransmonQubit):
         return (qt.tensor(id_q, self.f_res * n_op) - 0.5 * self.f01 * qt.tensor(sz, id_r)
                 + self.g * (qt.tensor(sm, a.dag()) + qt.tensor(sm.dag(), a)))  # full Jaynes-Cummings Hamiltonian
 
+    @property
+    def chi_transmon(self):
+        """
+        Analytic dispersive shift of a multilevel transmon (Koch et al. 2007),
+        chi = g^2 alpha / (Delta (Delta + alpha)) in GHz. The |1>-|2> transition
+        also pushes the resonator, so this differs from g^2/Delta when |Delta| is
+        not much larger than |alpha|; it tends to g^2/Delta for |alpha| -> infinity.
+        """
+        return self.g ** 2 * self.anharmonicity / (self.delta * (self.delta + self.anharmonicity))
+
+    def transmon_readout_hamiltonian(self):
+        """
+        Transmon ⊗ resonator Hamiltonian (qutip, GHz, hbar = 1) keeping all
+        `n_levels` transmon levels, to compare with the two-level models:
+            H = sum_j (E_j - E_0) |j><j| + f_r a†a + g (n / |<0|n|1>|) (a + a†)
+        n is the charge operator in the transmon eigenbasis. Dividing by
+        |<0|n|1>| makes g the coupling of the 0<->1 transition, the same g as in
+        the Jaynes-Cummings model; the higher transitions then couple with
+        their true relative matrix elements (<1|n|2> ~ sqrt(2) <0|n|1>) and the
+        counter-rotating terms are kept.
+        """
+        self.delta  # check that f_res and g are given
+        n_q = self.n_levels
+        n_mat = self.tmon.matrixelement_table('n_operator', evals_count=n_q)
+        n_op = qt.Qobj(n_mat / abs(n_mat[0, 1]))
+        a = qt.destroy(self.n_res)
+        return (qt.tensor(self.H0 / TWO_PI, qt.qeye(self.n_res))
+                + qt.tensor(qt.qeye(n_q), self.f_res * a.dag() * a)
+                + self.g * qt.tensor(n_op, a + a.dag()))
+
     @staticmethod
     def dressed_frequencies(H):
         """
@@ -224,11 +248,15 @@ class TransmonDynamics(TransmonQubit):
 
     def readout_summary(self):
         """
-        Dressed frequencies of the exact Jaynes-Cummings model ('jc') and of the
-        dispersive Hamiltonian ('disp'), next to the analytic prediction
-        ('analytic': f_r -/+ chi for g/e, f_q + chi for the qubit), and n_crit.
+        Dressed frequencies of the exact Jaynes-Cummings model ('jc'), of the
+        dispersive Hamiltonian ('disp') and of the full multilevel transmon
+        ('transmon', see transmon_readout_hamiltonian), next to the analytic
+        prediction ('analytic': f_r -/+ chi for g/e, f_q + chi for the qubit),
+        the multilevel analytic shift 'chi_transmon', and n_crit.
         """
         return {'jc': self.dressed_frequencies(self.readout_hamiltonian()),
+                'transmon': self.dressed_frequencies(self.transmon_readout_hamiltonian()),
+                'chi_transmon': self.chi_transmon,
                 'disp': self.dressed_frequencies(self.readout_hamiltonian(dispersive=True)),
                 'analytic': {'f01': self.f01 + self.chi, 'f_res_0': self.f_res - self.chi,
                              'f_res_1': self.f_res + self.chi, 'chi': self.chi},
@@ -347,7 +375,7 @@ if __name__ == '__main__':
     x_gate = XGate(np.pi, sigma=5.0)
     t_pulse, traj = dyn.apply_gate(x_gate)
     pops = dyn.populations(traj)
-    x_gate.frequency_spectrum(omega_q=dyn.f01, save_as='x_pi_frequency_spectrum')
+    # x_gate.frequency_spectrum(omega_q=dyn.f01, save_as='x_pi_frequency_spectrum')
     # x_gate.plot_bloch_trajectory()
 
     fig, axes = plt.subplots(1, 3, figsize=(15, 4))
@@ -386,6 +414,9 @@ if __name__ == '__main__':
         f'  f_res(|0>) = {disp["f_res_0"]:.5f} GHz, f_res(|1>) = {disp["f_res_1"]:.5f} GHz',
         f'  dispersive shift chi: exact JC = {disp["chi"] * 1e3:.3f} MHz, '
         f'H_disp = {readout["disp"]["chi"] * 1e3:.3f} MHz, g^2/Delta = {readout["analytic"]["chi"] * 1e3:.3f} MHz',
+        f'  multilevel transmon (all {tmon.truncated_dim} levels, coupling g n/|n01|): '
+        f'chi = {readout["transmon"]["chi"] * 1e3:.3f} MHz, '
+        f'analytic g^2 alpha/(Delta (Delta + alpha)) = {readout["chi_transmon"] * 1e3:.3f} MHz',
         f'  critical photon number n_crit = Delta^2/(4 g^2) = {readout["n_crit"]:.0f}',
         f'  Purcell-limited T1 = {dyn.purcell_t1() / 1e3:.1f} us',
         '      Purcell decay: the qubit is slightly hybridized with the resonator, so it',
