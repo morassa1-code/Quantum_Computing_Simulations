@@ -26,11 +26,23 @@
 
 %------------------------------------------------------------------
 \section*{Hamiltonian}
+General drive operator $D$ (\texttt{drive\_op}); $H_0$, $D$ and the collapse operators can be
+passed in from outside, the default being the closed Duffing model:
 \begin{align}
-  H(t) &= H_0 + s(t)\,(a + \ad) && \text{(lab frame, no RWA)} \\
+  H(t) &= H_0 + s(t)\,D && \text{(lab frame, no RWA)} \\
+  D &= a + \ad && \text{(Duffing default)} \\
+  \braket{0|D|1} &= 1 && \text{(so that the pulse area is the rotation angle)}
+\end{align}
+Closed system (no collapse operators, \texttt{qutip.sesolve}):
+\begin{align}
   \ii \frac{\dd}{\dd t}\ket{\psi(t)} &= H(t)\ket{\psi(t)}, \qquad
   U(t) = \mathcal{T}\exp\!\left[-\ii\!\int_0^{t} H(t')\,\dd t'\right] \\
   P_n(t) &= \left|\braket{n|\psi(t)}\right|^2
+\end{align}
+Open system (collapse operators $L_k$, \texttt{qutip.mesolve}):
+\begin{align}
+  \dot\rho &= -\ii\,[H(t), \rho] + \sum_k \Big(L_k\rho L_k^{\dagger} - \tfrac12\{L_k^{\dagger}L_k, \rho\}\Big) \\
+  P_n(t) &= \braket{n|\rho(t)|n} = \rho_{nn}(t)
 \end{align}
 
 %------------------------------------------------------------------
@@ -79,6 +91,19 @@ Square envelope:
 
 %------------------------------------------------------------------
 \section*{Rotating-wave approximation}
+As implemented (\texttt{driven\_hamiltonian}, \texttt{rwa=True}), still in the lab frame:
+split $D$ into its part above the diagonal (lowering, $\ket{i}\!\bra{j}$ with $i<j$) and its
+conjugate (raising), and keep only the co-rotating terms:
+\begin{align}
+  L &= \mathrm{triu}(D,\,1) = \sum_{i<j} D_{ij}\ket{i}\!\bra{j}, \qquad
+  D = L + L^{\dagger} \quad (D_{jj} = 0), \qquad L = a \ \text{ for } D = a + \ad \\
+  c(t) &= \Omega(t) - \ii\,\Omega_y(t), \qquad \theta(t) = \omega_d t + \varphi, \qquad
+  s(t) = \tfrac12\big(c\,e^{\ii\theta} + c^{*}e^{-\ii\theta}\big) \\
+  H_{\text{RWA}}(t) &= H_0 + \frac12\Big(c^{*}(t)\,e^{-\ii\theta(t)}\,L^{\dagger}
+     + c(t)\,e^{\ii\theta(t)}\,L\Big)
+\end{align}
+The dropped terms $c^{*}e^{-\ii\theta}L$ and $c\,e^{\ii\theta}L^{\dagger}$ oscillate at
+$\omega_d + \omega_q$. In the frame rotating at $\omega_d$:
 \begin{align}
   \Delta &= \omega_q - \omega_d \\
   H_{\text{RWA}} &= \Delta\,\ad a + \frac{\alpha}{2}\,\ad \ad a a
@@ -169,8 +194,7 @@ Charge operator in the eigenbasis, used for the drive and the resonator coupling
   n_{ij} &= \braket{i|\hat n|j}, \qquad
   \hat n \approx \ii\, n_{\rm zpf}\,(\ad - a), \qquad
   n_{\rm zpf} = \frac{1}{\sqrt 2}\left(\frac{E_J}{8E_C}\right)^{1/4} \\
-  |n_{j,j+1}| &\approx \sqrt{j+1}\,|n_{01}|, \qquad
-  N_+ = \mathrm{triu}(n_{ij},\,1) = \sum_{i<j} n_{ij}\ket{i}\!\bra{j}
+  |n_{j,j+1}| &\approx \sqrt{j+1}\,|n_{01}|
 \end{align}
 
 %------------------------------------------------------------------
@@ -230,48 +254,60 @@ Channels add as rates:
 Because $1/T_\phi \ge 0$, always $T_2 \le 2T_1$.
 
 %------------------------------------------------------------------
-\section*{Rotating-frame dynamics with dissipation (\texttt{TransmonDynamics})}
-Eigenbasis of the $N$ lowest levels, frame rotating at the drive frequency $f_d$ (RWA):
+\section*{Driven dynamics with dissipation (\texttt{TransmonDynamics})}
+\texttt{TransmonDynamics} is a \texttt{TransmonQubit} whose $H_0$, $D$ and collapse operators come
+from scqubits, so the pulses of the first part (envelope, DRAG, $X$/$Y$ gates, Rabi drive) and the
+Hamiltonian $H(t) = H_0 + s(t)\,D$ (or $H_{\rm RWA}$) apply unchanged.
+Eigenbasis of the $N$ lowest levels, lab frame, in rad/ns:
 \begin{align}
-  H_0 &= \sum_{j=0}^{N-1} 2\pi\,\big(E_j - E_0 - j\,f_d\big)\ket{j}\!\bra{j} \\
-  H_d(t) &= \frac{A(t)}{2}\Big(e^{\ii\varphi} N_+ + e^{-\ii\varphi} N_+^{\dagger}\Big),
-  \qquad H = H_0 + H_d(t)
+  H_0 &= \sum_{j=0}^{N-1} 2\pi\,\big(E_j - E_0\big)\ket{j}\!\bra{j}, \qquad
+  D = \frac{\hat n}{|n_{01}|} = \sum_{i,j}\frac{n_{ij}}{|n_{01}|}\ket{i}\!\bra{j} \\
+  \omega_q &= 2\pi f_{01}, \qquad \alpha_\omega = 2\pi\,\alpha
+  \qquad \text{(used by the pulse for resonance and DRAG)}
 \end{align}
-Lindblad master equation (solved with \texttt{qutip.mesolve}):
+Dividing by $|n_{01}|$ gives $|\braket{0|D|1}| = 1$, so a pulse of area $\theta$ still rotates
+0--1 by $\theta$. With the RWA, $L = \mathrm{triu}(D,1)$ contains every lowering matrix element
+($n_{01}, n_{12}, n_{02}, \dots$), not only nearest neighbours.
+Lindblad operators (so \texttt{apply\_gate} uses \texttt{mesolve}, see the open system above):
 \begin{align}
-  \dot\rho &= -\ii\,[H, \rho] + \sum_k \Big(L_k\rho L_k^{\dagger} - \tfrac12\{L_k^{\dagger}L_k, \rho\}\Big) \\
   L_j &= \sqrt{\frac{j}{T_1}}\;\ket{j-1}\!\bra{j}, \quad j = 1,\dots,N-1
   && \text{(relaxation)} \\
   L_\phi &= \sqrt{\frac{1}{2T_\phi}}\,\mathrm{diag}(-1,\,1,\,0,\dots,0)
   && \text{(dephasing of the 0--1 coherence at rate } 1/T_\phi)
 \end{align}
-Gaussian pulse of rotation angle $\theta$ on the 0--1 transition, truncated at $\pm 4\sigma$,
-normalised so that the area gives $\theta$:
-\begin{align}
-  A(t) &= A_0 \exp\!\left[-\frac{(t - 4\sigma)^2}{2\sigma^2}\right], \quad t \in [0, 8\sigma], \qquad
-  \int A(t)\,\dd t\;|n_{01}| = \theta \\
-  A_0 &= \frac{\theta}{|n_{01}|\sum_k e^{-(t_k - 4\sigma)^2/2\sigma^2}\,\Delta t},
-  \qquad \Delta t = \frac{1}{f_s}
-\end{align}
-Level populations: $P_j(t) = \braket{j|\rho(t)|j}$.
+Free (undriven) evolution, in the frame rotating at $f$ (default $f_{01}$), with $\hat N = \sum_j j\ket{j}\!\bra{j}$:
+\begin{equation}
+  H_{\rm free} = H_0 - 2\pi f\,\hat N = \sum_{j} 2\pi\big(E_j - E_0 - j\,f\big)\ket{j}\!\bra{j}
+\end{equation}
+$H_0$ is diagonal, so the frame changes only the phases of the coherences, not the populations,
+and removes the fast precession at $\omega_q$ during $\mu$s-long waits.
 
 %------------------------------------------------------------------
 \section*{Simulated $T_1$ and Ramsey ($T_2$) measurements}
-$T_1$: prepare $\ket{1}$, decay freely, fit
+$T_1$: excite $\ket{0}$ with a real pulse (default $X(\pi)$, simulated with decoherence), then
+decay freely and fit
 \begin{equation}
-  P_1(t) = e^{-t/T_1}
+  \rho(0) = \rho_{\rm after\ pulse}, \qquad P_1(t) = \braket{1|\rho(t)|1}, \qquad
+  P_1^{\rm fit}(t) = a\,e^{-t/T_1}
 \end{equation}
-Ramsey: ideal, instantaneous $\pi/2$ gates, free evolution with the drive detuned by $\delta$
-(added to $H_0$ as $2\pi\delta\,j$ on level $j$):
+Ramsey: pulse -- wait $t$ -- pulse, with a real pulse (default $X(\pi/2)$) driven at
+$f_d = f_{01} + \delta$. The pulse runs on $[0, T_p]$ and is simulated once, in the lab frame with
+decoherence, as a superoperator $\mathcal{S}$ (\texttt{qutip.propagator}):
 \begin{align}
-  U_{\pi/2} &= \exp\!\left[-\ii\,\frac{\pi}{4\,|n_{01}|}\big(N_+ + N_+^{\dagger}\big)\right], \qquad
-  \delta = \frac{20}{t_{\max}}, \quad t_{\max} = 3T_2 \\
-  \rho_{\rm in} &= U_{\pi/2}\ket{0}\!\bra{0}U_{\pi/2}^{\dagger}, \qquad
-  P_1(t) = \braket{1|\,U_{\pi/2}\,\rho(t)\,U_{\pi/2}^{\dagger}|1} \\
-  P_1^{\rm fit}(t) &= b + a\,e^{-t/T_2}\cos(2\pi\delta\,t)
+  \mathcal{S}[\rho] &= \text{state after the pulse from } \rho, \qquad
+  R = e^{\ii\,2\pi f_d T_p\,\hat N} \\
+  \rho_1 &= R\,\mathcal{S}\big[\ket{0}\!\bra{0}\big]\,R^{\dagger}
+  && \text{(into the frame rotating at } f_d) \\
+  \rho_2(t) &= e^{\mathcal{L}_{\rm free}t}\,\rho_1
+  && \text{(free evolution under } H_{\rm free},\ f = f_d) \\
+  P_1(t) &= \braket{1|\,\mathcal{S}\big[\rho_2(t)\big]\,|1}
 \end{align}
-Note: $U_{\pi/2}$ is built from the full $N_+$, so it also rotates the 1--2, 2--3, \dots\ transitions
-(by $|n_{12}|/|n_{01}| \approx \sqrt2$ times the angle) and leaks population out of the qubit
-subspace.
+In the frame rotating at $f_d$, the second pulse acts like the first (exact within the RWA, up
+to the counter-rotating terms), so $\mathcal{S}$ is reused for every wait $t$; the populations are
+the same in both frames. Fit:
+\begin{align}
+  \delta &= \frac{20}{t_{\max}}, \qquad t_{\max} = 3T_2 \\
+  P_1^{\rm fit}(t) &= b + a\,e^{-t/T_2}\cos(2\pi\delta\,t + \phi)
+\end{align}
 
 \end{document}
