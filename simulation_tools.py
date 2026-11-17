@@ -325,15 +325,18 @@ class DrivePulse:
             self.generate_drive_signal(omega_q, alpha=alpha)
         
         signal_ft = np.fft.fftshift(np.fft.fft(self.total_modulated_signal, n=n_fft))
-        freqs = np.fft.fftshift(
+        # fftfreq gives ordinary frequency f (cycles per time unit); the drive is
+        # cos(w_d t) with w_d angular (rad per time unit), so convert: w = 2 pi f
+        freqs = 2 * np.pi * np.fft.fftshift(
             np.fft.fftfreq(n_fft, d=1.0 / self.sample_rate))
         if plot:
             w_d = self.drive_frequency if self.drive_frequency is not None else omega_q
             # half_width = 10.0 / self.sigma  # ~10 spectral widths either side
             plt.plot(freqs, np.abs(signal_ft))
             plt.xlim(-(abs(w_d)*2), abs(w_d)*2)  
-            plt.axvline(omega_q if omega_q is not None else w_d, color='gray', linestyle='--',
-                        label=rf'$\omega_q = {w_d:.3f}$')
+            w_line = omega_q if omega_q is not None else w_d
+            plt.axvline(w_line, color='gray', linestyle='--',
+                        label=rf'$\omega_q = {w_line:.3f}$')
             if omega_q is not None and alpha is not None:
                 plt.axvline(omega_q + alpha, color='red', linestyle='--',
                             label=r'$\omega_q + \alpha$ (1$\leftrightarrow$2)')
