@@ -219,7 +219,34 @@ coupling between transmons and the drive:
 The normalized operator $\nq$ has $|\braket{0|\nq|1}| = 1$.
 
 %------------------------------------------------------------------
-\section*{Readout resonator: multilevel Jaynes--Cummings model and dispersive regime}
+\section*{Readout resonator: Jaynes--Cummings model and dispersive regime}
+\paragraph{Two-level qubit.}
+The qubit is the $0\leftrightarrow1$ transition, $f_q = f_{01}$, coupled to a resonator of
+frequency $f_r$ with coupling $g$. With $\sigma_+ = \ket{1}\!\bra{0}$, $\sigma_- = \ket{0}\!\bra{1}$,
+$\sigma_z = \ket{1}\!\bra{1} - \ket{0}\!\bra{0}$ and $\Delta = f_q - f_r$, the Jaynes--Cummings
+Hamiltonian (rotating-wave approximation, qubit $\otimes$ resonator, constant dropped) is
+\begin{equation}
+  H_{\rm JC} = \frac{f_q}{2}\,\sigma_z \otimes \id_r + \id_q \otimes f_r\,\ad a
+     + g\,\big(\sigma_- \otimes \ad + \sigma_+ \otimes a\big)
+\end{equation}
+The interaction only connects $\ket{1,n}$ and $\ket{0,n+1}$, whose bare energy difference is
+$\Delta$, with matrix element $g\sqrt{n+1}$. For $g\sqrt{n+1}\ll|\Delta|$, second-order
+perturbation theory gives the shifts
+\begin{equation}
+  \delta E_{1,n} = +\chi\,(n+1), \qquad \delta E_{0,n+1} = -\chi\,(n+1), \qquad
+  \chi = \frac{g^2}{\Delta}
+\end{equation}
+and the dispersive Hamiltonian
+\begin{equation}
+  H_{\rm disp} = \frac{f_q + \chi}{2}\,\sigma_z\otimes\id_r
+     + \id_q\otimes f_r\,\ad a + \chi\,\sigma_z\otimes\ad a,
+  \qquad [H_{\rm disp}, \sigma_z\otimes\id_r] = 0
+\end{equation}
+The exchange terms are gone: the qubit state only selects the resonator frequency,
+$f_r^{(0)} = f_r - \chi$, $f_r^{(1)} = f_r + \chi$, and the qubit frequency is pulled to
+$f_q + \chi$ ($n = 0$) with a further $2\chi$ per photon. Valid for $n \ll n_{\rm crit}
+= \Delta^2/4g^2$.
+\paragraph{Multilevel transmon (as implemented).}
 \texttt{Transmon\_Resonator\_Dynamics}: the transmon (all $N$ levels, \texttt{n\_levels}) coupled
 to a resonator (\texttt{scqubits.Oscillator}, $f_r$ = \texttt{f\_res}, $N_r$ photon levels) with
 coupling $g$ of the $0\leftrightarrow1$ transition. The joint space is
@@ -238,10 +265,8 @@ approximation, $E_j$ measured from $E_0$):
      \;+\; \sum_{j=0}^{N-2} g_j\Big(\ket{j}\!\bra{j+1} \otimes \ad + \ket{j+1}\!\bra{j} \otimes a\Big)
 \end{equation}
 Each photon moves the transmon by one rung only, $\ket{j+1,n} \leftrightarrow \ket{j,n+1}$, whose
-bare energy difference is $\Delta_j$ with matrix element $g_j\sqrt{n+1}$. For $N = 2$ this is
-the usual two-level model, $H = f_q \ket{1}\!\bra{1}\otimes\id_r + \id_q\otimes f_r\ad a
-+ g\,(\ket{0}\!\bra{1}\otimes\ad + \ket{1}\!\bra{0}\otimes a)$, with $\Delta = f_q - f_r$.
-For $g_j\sqrt{n+1}\ll|\Delta_j|$, second-order perturbation theory: $\ket{j,n}$ is pushed by
+bare energy difference is $\Delta_j$ with matrix element $g_j\sqrt{n+1}$. For $N = 2$ this
+reduces to the two-level model above. For $g_j\sqrt{n+1}\ll|\Delta_j|$, second-order perturbation theory: $\ket{j,n}$ is pushed by
 $\ket{j+1,n-1}$ (shift $-n\chi_j$) and by $\ket{j-1,n+1}$ (shift $+(n+1)\chi_{j-1}$), giving the
 diagonal dispersive Hamiltonian (\texttt{dispersive=True}, $\chi_{-1} = 0$):
 \begin{equation}
