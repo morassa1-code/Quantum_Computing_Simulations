@@ -27,9 +27,19 @@ T1_CHANNEL_INFO = {
         '      drive/charge line and emits photons into it. scqubits assumes direct coupling\n'
         '      to the line, which gives an unphysically short T1 for a transmon\n'
         '      (real lines are coupled through a tiny capacitance).',
+    't1_flux_bias_line':
+        'loss into the flux bias line: the qubit\'s SQUID loop is inductively coupled to the\n'
+        '      on-chip line that sets the flux, so the qubit emits photons into the line\'s\n'
+        '      impedance. Grows with the flux sensitivity of f01 (zero at the flux sweet spot\n'
+        '      for a symmetric SQUID); set by the mutual inductance M and line impedance\n'
+        '      (scqubits default Z = 50 Ohm, M = 400).',
 }
 
 T_PHI_CHANNEL_INFO = {
+    'tphi_1_over_f_flux':
+        '1/f dephasing time (or rate) due to flux noise: fluctuating magnetic flux in the\n'
+        '      SQUID loop (surface spins) shifts EJ and so f01 in proportion to df01/dflux.\n'
+        '      Dominant dephasing away from the flux sweet spot (flux = 0 or 0.5).\n',
     'tphi_1_over_f_cc':
         '1/f dephasing time (or rate) due to critical current noise.\n',
     'tphi_1_over_f_ng':
@@ -37,11 +47,12 @@ T_PHI_CHANNEL_INFO = {
 }
 
 
-def make_transmon(ej=20.0, ec=0.25, ng=0.0, ncut=30, n_levels=4):
+def make_transmon(ej=20.0, ec=0.25, ng=0.0, ncut=30, n_levels=4, flux=0.0, d=0.0):
     """
-    scqubits Transmon (cosine potential, charge basis).
+    scqubits TunableTransmon (flux-tunable, asymmetric SQUID, charge basis):
+        EJ(flux) = EJmax sqrt(cos^2(pi flux) + d^2 sin^2(pi flux))
     ej : float
-        Josephson energy in GHz.
+        Maximum Josephson energy EJmax in GHz (the value at flux = 0).
     ec : float
         Charging energy in GHz.
     ng : float
@@ -50,8 +61,14 @@ def make_transmon(ej=20.0, ec=0.25, ng=0.0, ncut=30, n_levels=4):
         Truncation level for the charge basis.
     n_levels : int
         Number of energy levels to consider.
+    flux : float
+        External flux through the SQUID loop in units of the flux quantum
+        (0 = the top sweet spot, EJ = EJmax; 0.5 = the bottom, EJ = d EJmax).
+    d : float
+        SQUID junction asymmetry, d = (EJ2 - EJ1) / (EJ1 + EJ2) (0 = symmetric).
     """
-    return scq.Transmon(EJ=ej, EC=ec, ng=ng, ncut=ncut, truncated_dim=n_levels)
+    return scq.TunableTransmon(EJmax=ej, EC=ec, d=d, flux=flux, ng=ng, ncut=ncut,
+                               truncated_dim=n_levels)
 
 
 def make_resonator(f_res=5.0, n_res=12):
@@ -67,7 +84,7 @@ def make_resonator(f_res=5.0, n_res=12):
 
 class Transmon_Resonator_Dynamics(TransmonQubit):
     """
-    A scqubits Transmon coupled to a readout resonator (scqubits Oscillator),
+    A scqubits TunableTransmon coupled to a readout resonator (scqubits Oscillator),
     as a simulation_tools TransmonQubit, so the pulses there (DrivePulse,
     XGate, YGate, RabiDrive) and apply_gate, fit_rabi, ... work on it
     unchanged. Every operator lives in the joint transmon ⊗ resonator space
@@ -95,7 +112,7 @@ class Transmon_Resonator_Dynamics(TransmonQubit):
 
     def __init__(self, tmon, resonator, g, kappa=None, noise_channels=None):
         """
-        tmon : scqubits.Transmon (truncated_dim = number of transmon levels).
+        tmon : scqubits.TunableTransmon (truncated_dim = number of transmon levels).
         resonator : scqubits.Oscillator (E_osc = f_res in GHz, truncated_dim =
             number of photon states).
         g, kappa : qubit-resonator coupling and resonator linewidth (GHz).

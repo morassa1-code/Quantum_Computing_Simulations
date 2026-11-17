@@ -71,5 +71,5 @@ if __name__ == '__main__':
         '      decay sqrt(2 pi kappa) a, see "with Purcell decay" above.',
         ''])
     print(report)
-    print('report saved to', save_output('scq_report_free_evolution_change', text=report))
+    print('report saved to', save_output('scq_report', text=report))
     print('figure saved to', fig_path)
