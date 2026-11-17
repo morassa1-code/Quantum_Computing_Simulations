@@ -1,7 +1,13 @@
 import os
+from matplotlib import lines
+from matplotlib.axis import Axis
+from matplotlib.figure import Figure
 import numpy as np
 import matplotlib.pyplot as plt
 import qutip as qt
+from scipy.optimize import curve_fit
+import trimesh
+from trimesh.visual.material import PBRMaterial
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
 
@@ -15,6 +21,16 @@ def save_and_show(save_as=None, dpi=200):
     plt.show()
 
 
+def save_text(text, name):
+    """Save text to DATA_DIR/name (.txt if no extension) and return the path."""
+    os.makedirs(DATA_DIR, exist_ok=True)
+    name = name if os.path.splitext(name)[1] else name + '.txt'
+    path = os.path.join(DATA_DIR, name)
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(text)
+    return path
+
+
 def export_bloch_glb(x, y, z, name, max_points=400, tube_radius=0.015):
     """
     Save a Bloch-sphere path as a 3D model (.glb) in DATA_DIR: a translucent
@@ -23,8 +39,6 @@ def export_bloch_glb(x, y, z, name, max_points=400, tube_radius=0.015):
     drag to rotate it during the slide show. A .glb has no text, so label
     the axes (|0>, |1>, |+>, ...) with text boxes on the slide.
     """
-    import trimesh
-    from trimesh.visual.material import PBRMaterial
 
     os.makedirs(DATA_DIR, exist_ok=True)
     name = name if os.path.splitext(name)[1] else name + '.glb'
@@ -137,6 +151,8 @@ class DrivePulse:
         self.drag_coeff = drag_coeff
         self.total_modulated_signal = None  # set by generate_drive_signal(): Omega(t)*cos(w_d t + phase)
         self.deriviate_modulated_signal = None  # envelope derivative used for DRAG
+        self.complex_envelope = None  # set by generate_drive_signal(): Omega_x - i*Omega_y, used by the RWA
+        self.drive_phase = None  # set by generate_drive_signal(): w_d*t + phase
   
     @property
     def envelope_duration(self):
@@ -160,7 +176,7 @@ class DrivePulse:
         return np.arange(t0 - self.n_sigma * self.sigma,
                           t0 + self.n_sigma * self.sigma + dt, dt)
 
-    def generate_drive_signal(self, omega_q, t0=0.0, alpha=None):
+    def generate_drive_signal(self, omega_q, t0=0.0, alpha=None, use_envelope=True, rwa=False):
         """
         Lab-frame signal Omega(t)*cos(w_d t + phase) to add to (a + a_dag).
         If drag_coeff != 0, the DRAG quadrature is added too, which needs the
@@ -170,9 +186,14 @@ class DrivePulse:
             raise ValueError("DRAG needs the qubit anharmonicity: pass alpha")
         t = self.time_array(t0)
         w_d = self.drive_frequency if self.drive_frequency is not None else omega_q
-        env = self.envelope(t, t0)
         theta = w_d * t + self.phase
-        signal = env * np.cos(theta)
+        if use_envelope:
+            env = self.envelope(t, t0)
+            signal = env * np.cos(theta)
+        else:
+            env = np.ones_like(t)
+            signal = np.cos(theta)
+        omega_y = np.zeros_like(t)
         if self.drag_coeff != 0.0:
             # DRAG: quadrature Omega_y = -(lambda/alpha) * dOmega/dt, 90 deg out of phase (deriviate)
             dt = 1.0 / self.sample_rate
@@ -180,6 +201,10 @@ class DrivePulse:
             omega_y = -(self.drag_coeff / alpha) * self.deriviate_modulated_signal
             signal = signal + omega_y * np.sin(theta)  # lab-frame sign for H = Omega(t)(a + a_dag)
         self.total_modulated_signal = signal
+
+        # signal = Re[(Omega_x - i*Omega_y) * exp(i*theta)]
+        self.complex_envelope = env - 1j * omega_y
+        self.drive_phase = theta
         return t, self.total_modulated_signal
 
     def plot(self, omega_q, t0=0.0, alpha=None, save_as=None):
@@ -236,7 +261,8 @@ class DrivePulse:
         sz = qt.projection(n, 0, 0) - qt.projection(n, 1, 1)
         p01 = qt.projection(n, 0, 0) + qt.projection(n, 1, 1)
 
-        states = [qt.Qobj(row.reshape(-1, 1)) for row in psi_traj]
+        # kets (closed system) or density matrices (open system)
+        states = [qt.Qobj(row if row.ndim == 2 else row.reshape(-1, 1)) for row in psi_traj]
         # dividing by <P01> renormalizes the projection onto the qubit subspace
         # (population leaked to |2>, ... is discarded)
         pop = np.real(qt.expect(p01, states))
@@ -299,21 +325,24 @@ class DrivePulse:
             self.generate_drive_signal(omega_q, alpha=alpha)
         
         signal_ft = np.fft.fftshift(np.fft.fft(self.total_modulated_signal, n=n_fft))
+        # fftfreq gives ordinary frequency f (cycles per time unit); the drive is
+        # cos(w_d t) with w_d angular (rad per time unit), so convert: w = 2 pi f
         freqs = 2 * np.pi * np.fft.fftshift(
             np.fft.fftfreq(n_fft, d=1.0 / self.sample_rate))
         if plot:
             w_d = self.drive_frequency if self.drive_frequency is not None else omega_q
-            half_width = 10.0 / self.sigma  # ~10 spectral widths either side
+            # half_width = 10.0 / self.sigma  # ~10 spectral widths either side
             plt.plot(freqs, np.abs(signal_ft))
-            plt.xlim(-(abs(w_d) + half_width), abs(w_d) + half_width)  # both peaks, +/-w_d
-            plt.axvline(omega_q if omega_q is not None else w_d, color='gray', linestyle='--',
-                        label=r'$\omega_q$')
+            plt.xlim(-(abs(w_d)*2), abs(w_d)*2)  
+            w_line = omega_q if omega_q is not None else w_d
+            plt.axvline(w_line, color='gray', linestyle='--',
+                        label=rf'$\omega_q = {w_line:.3f}$')
             if omega_q is not None and alpha is not None:
                 plt.axvline(omega_q + alpha, color='red', linestyle='--',
                             label=r'$\omega_q + \alpha$ (1$\leftrightarrow$2)')
             plt.legend()
-            plt.xlabel('Angular frequency (arb. units)')
-            plt.ylabel('Magnitude')
+            plt.xlabel('Angular frequency (GHz)')
+            plt.ylabel('Magnitude (arb. units)')
             plt.title(f'{self.__class__.__name__} frequency spectrum')
             plt.grid()
             save_and_show(save_as)
@@ -392,6 +421,11 @@ class ZGate:
         return bloch_x, bloch_y, bloch_z
 
 
+
+    
+
+
+
 class TransmonQubit:
     """
     Truncated (n_levels) transmon: a weakly anharmonic Josephson-junction
@@ -403,13 +437,19 @@ class TransmonQubit:
     omega_q is the 0<->1 transition frequency and alpha < 0 is the
     anharmonicity, which separates the 1<->2 transition from the 0<->1
     one and is what makes single-qubit gates imperfect (leakage into |2>).
+
+    By default the system is closed (c_ops empty, apply_gate uses sesolve).
+    Pass Lindblad collapse operators as c_ops to make it open (mesolve).
+    Subclasses (e.g. scqubits_tools.TransmonDynamics) can override H0 and
+    drive_op to swap the Duffing model for another Hamiltonian.
     """
 
-    def __init__(self, omega_q=5.0, alpha=-0.3, n_levels=4, hbar=1.0):
+    def __init__(self, omega_q=5.0, alpha=-0.3, n_levels=4, hbar=1.0, c_ops=None):
         self.omega_q = omega_q
         self.alpha = alpha
         self.n_levels = n_levels
         self.hbar = hbar
+        self.c_ops = list(c_ops) if c_ops else []
 
     @property
     def energies(self):
@@ -432,34 +472,180 @@ class TransmonQubit:
     def ground_state(self):
         return qt.basis(self.n_levels, 0)
 
-    def apply_gate(self, pulse, psi0=None, t0=0.0):
+    @property
+    def drive_op(self):
+        """Operator the drive couples to (a + a_dag for the Duffing model)."""
+        return self.a + self.a_dag
+
+    def driven_hamiltonian(self, pulse, t0=0.0, rwa=False, H0=None, drive_op=None):
         """
-        Propagate a state through a drive pulse with qutip.sesolve on the
-        full lab-frame Hamiltonian H0 + Omega(t)*cos(w_d t+phase)*(a+a_dag)
-        - no RWA, no 2-level truncation, so leakage out of the qubit
-        subspace (into |2>, etc.) shows up naturally. The drive is passed
-        to qutip as an array sampled on the pulse's own time grid (set by
-        its sample_rate).
+        Lab-frame Hamiltonian H0 + Omega(t)*cos(w_d t+phase)*drive_op for
+        `pulse` (qutip list format) and the pulse's time grid. H0 and
+        drive_op default to this qubit's own, so a Hamiltonian built
+        elsewhere can be passed in. The pulse's resonance and DRAG still use
+        self.omega_q / self.alpha, and its area equals its rotation angle
+        only if <0|drive_op|1> = 1.
 
-        psi0 may be a qutip ket or a plain vector (default: ground state).
+        rwa=True keeps only the co-rotating terms: drive_op is split into its
+        part above the diagonal L (= a for a + a_dag) and L^dag, giving
+        (1/2) * (c* e^{-i theta} L^dag + c e^{i theta} L).
+        """
+        H0 = self.H0 if H0 is None else H0
+        drive_op = self.drive_op if drive_op is None else drive_op
+        pulse.generate_drive_signal(self.omega_q, t0, self.alpha)
+        t_vals = pulse.time_array(t0)
 
-        Returns the time grid and the full complex state at every step
-        (shape (len(t_vals), n_levels)), so callers can get populations
-        (abs(psi_traj)**2), the final state (psi_traj[-1]), or the relative
-        phase between levels (needed for a Bloch-sphere trajectory).
+        if rwa:
+            lower = qt.Qobj(np.triu(drive_op.full(), 1), dims=drive_op.dims)
+            c, theta = pulse.complex_envelope, pulse.drive_phase
+            H = [H0,
+                 [lower.dag(), 0.5 * np.conj(c) * np.exp(-1j * theta)],
+                 [lower,       0.5 * c * np.exp(1j * theta)]]
+        else:
+            H = [H0, [drive_op, pulse.total_modulated_signal]]
+        return H, t_vals
+
+    def apply_gate(self, pulse, psi0=None, t0=0.0, rwa=False, H0=None, drive_op=None,
+                   c_ops=None):
+        """
+        Propagate a state through a drive pulse on the full lab-frame
+        Hamiltonian H0 + Omega(t)*cos(w_d t+phase)*drive_op (see
+        driven_hamiltonian) - no RWA unless rwa=True, no 2-level truncation,
+        so leakage out of the qubit subspace (into |2>, etc.) shows up
+        naturally. The drive is passed to qutip as an array sampled on the
+        pulse's own time grid (set by its sample_rate).
+
+        H0, drive_op, c_ops : optional overrides of this qubit's own. With no
+        collapse operators (the default) and a ket, the system is closed and
+        qutip.sesolve is used; otherwise qutip.mesolve.
+
+        psi0 may be a qutip ket / density matrix or a plain vector (default:
+        ground state).
+
+        Returns the time grid and the full complex state at every step:
+        kets, shape (len(t_vals), n_levels), for a closed system, or density
+        matrices, shape (len(t_vals), n_levels, n_levels), for an open one.
+        Callers can get populations (self.populations), the final state
+        (psi_traj[-1]), or the relative phase between levels (needed for a
+        Bloch-sphere trajectory).
         """
         if psi0 is None:
             psi0 = self.ground_state
         elif not isinstance(psi0, qt.Qobj):
             psi0 = qt.Qobj(np.asarray(psi0, dtype=complex).reshape(-1, 1))
+        c_ops = self.c_ops if c_ops is None else c_ops
 
-        pulse.generate_drive_signal(self.omega_q, t0, self.alpha)
-        t_vals = pulse.time_array(t0)
-
-        H = [self.H0, [self.a + self.a_dag, pulse.total_modulated_signal]]
-        result = qt.sesolve(H, psi0, t_vals,
-                            options={'store_states': True, 'nsteps': 100000})
-
-        psi_traj = np.array([state.full().ravel() for state in result.states])
+        H, t_vals = self.driven_hamiltonian(pulse, t0, rwa, H0, drive_op)
+        options = {'store_states': True, 'nsteps': 100000}
+        if c_ops or psi0.isoper:
+            result = qt.mesolve(H, psi0, t_vals, c_ops=c_ops, options=options)
+            psi_traj = np.array([state.full() for state in result.states])
+        else:
+            result = qt.sesolve(H, psi0, t_vals, options=options)
+            psi_traj = np.array([state.full().ravel() for state in result.states])
         return t_vals, psi_traj
 
+
+    def populations(self, psi_traj):
+        """Population of each level at every time step (shape (n_steps, n_levels))."""
+        if not isinstance(psi_traj, np.ndarray):
+            raise TypeError("psi_traj must be a numpy array")
+        if psi_traj.ndim == 3:  # density matrices: the diagonals
+            return np.real(np.diagonal(psi_traj, axis1=1, axis2=2))
+        return np.abs(psi_traj)**2
+
+
+    def fit_rabi(self, t_vals, psi_traj, drive=None, level=1, n_fft=2**15, save_as=None):
+        """
+        Fit the population of `level` to the two-level Rabi formula
+
+            P(t) = (A/2) * (1 - cos(w * (t - t_vals[0])))
+
+        where A is the maximum population and w the oscillation frequency
+        (generalized Rabi frequency sqrt(Omega^2 + Delta^2)). If `drive` is a
+        RabiDrive, the fit is compared with the theory A = Omega^2/(Omega^2 +
+        Delta^2), w = sqrt(Omega^2 + Delta^2). Returns a dict (max_pop,
+        omega_eff, fit, and the theory values). The comparison is saved to
+        DATA_DIR/save_as (.txt if no extension), or printed if save_as is None.
+        """
+        tau = np.asarray(t_vals) - t_vals[0]
+        pop = self.populations(psi_traj)[:, level]
+        dt = tau[1] - tau[0]
+
+        # initial guess: dominant frequency of the population (FFT peak)
+        spectrum = np.abs(np.fft.rfft(pop - pop.mean(), n=n_fft))
+        w0 = 2 * np.pi * np.fft.rfftfreq(n_fft, dt)[np.argmax(spectrum)]
+
+        def model(t, A, w, B):
+            return 0.5 * A * (1 - np.cos(w * t)) + B
+
+        (A, w, B), _ = curve_fit(model, tau, pop, p0=[pop.max(), w0, pop.mean()])
+        result = {'max_pop': pop.max(), 'max_pop_fit': A, 'omega_eff': abs(w), 
+                  'offset_fit': B, 'fit': model(tau, A, w, B)}
+
+        report = [f'omega_q = {self.omega_q}, alpha = {self.alpha}, n_levels = {self.n_levels}',
+                  f'|{level}> population: max = {pop.max():.4f}, fit amplitude = {A:.4f}, '
+                  f'fit omega = {abs(w):.5f} (fit offset = {B:.4f})']
+        if drive is not None:
+            max_pop_theory, omega_th = drive.expected_rabi(self.omega_q)
+            result.update(max_pop_theory=max_pop_theory, omega_eff_theory=omega_th)
+            report.insert(1, f'omega_rabi = {drive.omega_rabi}, '
+                             f'detuning = {drive.detuning(self.omega_q)}, duration = {drive.duration}')
+            report.append(f'theory:        max = {max_pop_theory:.4f}, omega = {omega_th:.5f}  '
+                          f'(errors: {abs(A - max_pop_theory) / max_pop_theory:.1%}, '
+                          f'{abs(abs(w) - omega_th) / omega_th:.1%})')
+        report = '\n'.join(report) + '\n'
+        if save_as:
+            save_text(report, save_as)
+        else:
+            print(report)
+        return result
+
+    def plot_populations(self, t_vals, psi_traj, fit=None, save_as=None):
+        """Plot the probability of each level |0>, |1>, ... against time (fit: dict from fit_rabi)."""
+        populations = self.populations(psi_traj)
+        for n in range(populations.shape[1]):
+            plt.plot(t_vals, populations[:, n], label=f'|{n}>')
+        if fit is not None:
+            plt.plot(t_vals, fit['fit'], 'k--', label='Rabi fit')
+        plt.xlabel('Time (arb. units)')
+        plt.ylabel('Population')
+        plt.title('Rabi oscillations')
+        plt.legend()
+        plt.grid()
+        save_and_show(save_as)
+
+
+class RabiDrive(DrivePulse):
+    """
+    A continuous drive with constant amplitude Omega(t) = omega_rabi for
+    `duration` (a square envelope), to watch Rabi oscillations.
+
+    omega_rabi : Rabi frequency (the constant envelope amplitude).
+    duration : length of the drive.
+    drive_frequency : carrier frequency; None means resonant with the qubit.
+    """
+
+    def __init__(self, omega_rabi, duration=400.0, phase=0.0, sample_rate=200.0,
+                 drive_frequency=None):
+        super().__init__(angle=omega_rabi * duration, phase=phase,
+                         sigma=duration / 2, n_sigma=1, sample_rate=sample_rate,
+                         drive_frequency=drive_frequency)
+        self.omega_rabi = omega_rabi
+        self.duration = duration
+
+    def envelope(self, t, t0=0.0):
+        return self.omega_rabi * np.where(np.abs(t - t0) <= self.duration / 2, 1.0, 0.0)
+
+
+    def detuning(self, omega_q):
+        """Return the detuning of the drive carrier from the qubit's 0<->1 transition."""
+        if self.drive_frequency is None:
+            return 0.0
+        return self.drive_frequency - omega_q
+
+    def expected_rabi(self, omega_q):
+        """Two-level RWA theory: (max population, oscillation frequency)."""
+        delta = self.detuning(omega_q)
+        w = np.hypot(self.omega_rabi, delta) # Rabi frequency sqrt(Omega^2 + Delta^2)
+        return self.omega_rabi**2 / w**2, w

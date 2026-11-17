@@ -6,31 +6,58 @@
 \newcommand{\dd}{\mathrm{d}}
 \newcommand{\ii}{\mathrm{i}}
 \newcommand{\ad}{a^{\dagger}}
+\newcommand{\id}{\mathbb{1}}
+\newcommand{\nq}{\tilde n}
 
-\title{Single transmon qubit gate simulation --- formulas}
+\title{Transmon simulations --- formulas}
 \author{}
 \date{}
 
 \begin{document}
 \maketitle
-\noindent Units: $\hbar = 1$.
+\noindent Units: $\hbar = 1$. Operators acting on one subsystem of a composite system are always
+written with an explicit tensor product, $A \otimes \id$ or $\id \otimes B$; $\id_X$ is the identity of
+subsystem $X$ (transmon $q$, resonator $r$, transmon $1$ or $2$).
+
+%==================================================================
+\part*{Single transmon, pulses (\texttt{simulation\_tools.py})}
 
 %------------------------------------------------------------------
 \section*{Transmon (truncated Duffing oscillator)}
+\texttt{TransmonQubit}, $N$ levels (\texttt{n\_levels}), Fock basis:
 \begin{align}
   E_n &= n\,\omega_q + \frac{\alpha}{2}\,n(n-1), \qquad n = 0,\dots,N-1 \\
   H_0 &= \sum_{n=0}^{N-1} E_n \ket{n}\!\bra{n}
        = \omega_q\, \ad a + \frac{\alpha}{2}\, \ad \ad a a \\
   \omega_{01} &= \omega_q, \qquad \omega_{12} = \omega_q + \alpha, \qquad \alpha < 0
 \end{align}
+Embedded in a larger system (second subsystem $X$) the same operator acts as
+$H_0 \otimes \id_X$; the following sections do this with a resonator or a second transmon.
 
 %------------------------------------------------------------------
 \section*{Hamiltonian}
+General drive operator $D$ (\texttt{drive\_op}); $H_0$, $D$ and the collapse operators can be
+passed in from outside, the default being the closed Duffing model:
 \begin{align}
-  H(t) &= H_0 + s(t)\,(a + \ad) && \text{(lab frame, no RWA)} \\
+  H(t) &= H_0 + s(t)\,D && \text{(lab frame, no RWA)} \\
+  D &= a + \ad && \text{(Duffing default)} \\
+  \braket{0|D|1} &= 1 && \text{(so that the pulse area is the rotation angle)}
+\end{align}
+With a second subsystem $X$ the Hamiltonian reads
+\begin{equation}
+  H(t) = H_0 \otimes \id_X + \ldots + s(t)\,\big(D \otimes \id_X\big),
+\end{equation}
+the drive acting only on the transmon.
+Closed system (no collapse operators, \texttt{qutip.sesolve}):
+\begin{align}
   \ii \frac{\dd}{\dd t}\ket{\psi(t)} &= H(t)\ket{\psi(t)}, \qquad
   U(t) = \mathcal{T}\exp\!\left[-\ii\!\int_0^{t} H(t')\,\dd t'\right] \\
   P_n(t) &= \left|\braket{n|\psi(t)}\right|^2
+\end{align}
+Open system (collapse operators $L_k$, \texttt{qutip.mesolve}):
+\begin{align}
+  \dot\rho &= -\ii\,[H(t), \rho] + \sum_k \Big(L_k\rho L_k^{\dagger} - \tfrac12\{L_k^{\dagger}L_k, \rho\}\Big) \\
+  P_n(t) &= \braket{n|\rho(t)|n} = \rho_{nn}(t)
 \end{align}
 
 %------------------------------------------------------------------
@@ -40,24 +67,22 @@
   A &= \frac{\theta}{\sigma\sqrt{2\pi}} \\
   \int_{-\infty}^{\infty} \Omega(t)\,\dd t &= A\,\sigma\sqrt{2\pi} = \theta
 \end{align}
+Square envelope (\texttt{RabiDrive}, constant amplitude $\Omega_R$ for a duration $T$, $\theta = \Omega_R T$):
+\begin{equation}
+  \Omega_{\square}(t) = \Omega_R\,\Theta\!\left(\tfrac{T}{2} - |t - t_0|\right)
+\end{equation}
 
 %------------------------------------------------------------------
 \section*{Pulse duration and rotation angle}
 \begin{align}
   T &= 2\,n_\sigma \sigma, \qquad t \in \left[\,t_0 - n_\sigma\sigma,\; t_0 + n_\sigma\sigma\,\right] \\
-  \sigma &= \frac{T}{2\,n_\sigma} \\
   \theta_{\text{actual}} &= \int_{t_0 - n_\sigma\sigma}^{t_0 + n_\sigma\sigma} \Omega(t)\,\dd t
      = A\,\sigma\sqrt{2\pi}\;\mathrm{erf}\!\left(\frac{n_\sigma}{\sqrt 2}\right) \\
-  \mathrm{erf}(x) &= \frac{2}{\sqrt{\pi}}\int_0^{x} e^{-u^2}\,\dd u \\
-  A_\pi &= \frac{\pi}{\sigma\sqrt{2\pi}} = \frac{1}{\sigma}\sqrt{\frac{\pi}{2}}
+  \mathrm{erf}(x) &= \frac{2}{\sqrt{\pi}}\int_0^{x} e^{-u^2}\,\dd u
 \end{align}
-Time grid:
+Time grid (\texttt{sample\_rate} $f_s$):
 \begin{equation}
   \Delta t = \frac{1}{f_s}, \qquad t_k = t_0 - n_\sigma\sigma + k\,\Delta t
-\end{equation}
-Square envelope:
-\begin{equation}
-  \Omega_{\square}(t) = A\,\Theta\!\left(n_\sigma\sigma - |t - t_0|\right)
 \end{equation}
 
 %------------------------------------------------------------------
@@ -71,18 +96,29 @@ Square envelope:
 %------------------------------------------------------------------
 \section*{DRAG}
 \begin{align}
-  \Omega_y(t) &= -\frac{\lambda}{\alpha}\,\frac{\dd\Omega}{\dd t}, \qquad
-  \frac{\dd\Omega}{\dd t} = -\frac{t - t_0}{\sigma^2}\,\Omega(t) \\
+  \Omega_y(t) &= -\frac{\lambda}{\alpha}\,\frac{\dd\Omega}{\dd t}
+  \qquad (\text{numerical gradient of the sampled envelope}) \\
   s(t) &= \Omega(t)\cos(\omega_d t + \varphi) + \Omega_y(t)\sin(\omega_d t + \varphi) \\
        &= \mathrm{Re}\!\left[\big(\Omega(t) - \ii\,\Omega_y(t)\big)\,e^{\ii(\omega_d t + \varphi)}\right]
 \end{align}
 
 %------------------------------------------------------------------
 \section*{Rotating-wave approximation}
+As implemented (\texttt{driven\_hamiltonian}, \texttt{rwa=True}), still in the lab frame:
+split $D$ into its part above the diagonal (lowering, $\ket{i}\!\bra{j}$ with $i<j$) and its
+conjugate (raising), and keep only the co-rotating terms:
+\begin{align}
+  L &= \mathrm{triu}(D,\,1) = \sum_{i<j} D_{ij}\ket{i}\!\bra{j}, \qquad
+  D = L + L^{\dagger} \quad (D_{jj} = 0), \qquad L = a \ \text{ for } D = a + \ad \\
+  c(t) &= \Omega(t) - \ii\,\Omega_y(t), \qquad \theta(t) = \omega_d t + \varphi, \qquad
+  s(t) = \tfrac12\big(c\,e^{\ii\theta} + c^{*}e^{-\ii\theta}\big) \\
+  H_{\text{RWA}}(t) &= H_0 + \frac12\Big(c^{*}(t)\,e^{-\ii\theta(t)}\,L^{\dagger}
+     + c(t)\,e^{\ii\theta(t)}\,L\Big)
+\end{align}
+The dropped terms $c^{*}e^{-\ii\theta}L$ and $c\,e^{\ii\theta}L^{\dagger}$ oscillate at
+$\omega_d + \omega_q$. In the frame rotating at $\omega_d$ (qubit subspace):
 \begin{align}
   \Delta &= \omega_q - \omega_d \\
-  H_{\text{RWA}} &= \Delta\,\ad a + \frac{\alpha}{2}\,\ad \ad a a
-     + \frac{1}{2}\Big[\big(\Omega + \ii\,\Omega_y\big)\,e^{-\ii\varphi}\,\ad + \text{h.c.}\Big] \\
   H_{\text{eff}}^{\text{qubit}} &= \frac{\Omega(t)}{2}\Big[\cos\varphi\,\sigma_x + \sin\varphi\,\sigma_y\Big] \\
   U_{\text{gate}} &= \exp\!\left[-\ii\,\frac{\theta}{2}\,\big(\cos\varphi\,\sigma_x + \sin\varphi\,\sigma_y\big)\right],
   \qquad \theta = \int \Omega(t)\,\dd t
@@ -100,15 +136,12 @@ Square envelope:
 
 %------------------------------------------------------------------
 \section*{Virtual Z gate}
+\texttt{ZGate.plot\_bloch\_trajectory}:
 \begin{align}
   H_Z &= \frac{\sigma_z}{2}, \qquad \ket{\psi(\tau)} = e^{-\ii\tau\sigma_z/2}\ket{\psi_0},
-  \qquad \tau \in [0, \theta] \\
+  \qquad \tau \in [0, \theta], \qquad \ket{\psi_0} = \ket{+} = \frac{\ket{0} + \ket{1}}{\sqrt{2}} \\
   U_Z(\theta) &= e^{-\ii\theta\sigma_z/2}
      = \begin{pmatrix} e^{-\ii\theta/2} & 0 \\ 0 & e^{\ii\theta/2} \end{pmatrix} \\
-  \ket{\psi_0} &= \ket{+} = \frac{\ket{0} + \ket{1}}{\sqrt{2}} \\
-  \begin{pmatrix} x(\tau) \\ y(\tau) \end{pmatrix}
-    &= \begin{pmatrix} \cos\tau & -\sin\tau \\ \sin\tau & \cos\tau \end{pmatrix}
-       \begin{pmatrix} x_0 \\ y_0 \end{pmatrix}, \qquad z(\tau) = z_0 \\
   \bm{r}_{\ket{+}}(\tau) &= \big(\cos\tau,\; \sin\tau,\; 0\big) \\
   \varphi_k &\to \varphi_k + \theta \quad \text{for every later pulse } k
 \end{align}
@@ -124,19 +157,24 @@ Square envelope:
   \begin{pmatrix} x' \\ y' \end{pmatrix}
     &= \begin{pmatrix} \cos\omega_d t & -\sin\omega_d t \\ \sin\omega_d t & \cos\omega_d t \end{pmatrix}
        \begin{pmatrix} x \\ y \end{pmatrix}, \qquad z' = z
-       \quad \text{(rotating frame)} \\
-  c_1 &\to c_1\, e^{\ii\omega_d t}
+       \quad \text{(rotating frame)}
 \end{align}
+Dividing by $\braket{P_{01}}$ renormalizes the projection onto the qubit subspace (population
+leaked to $\ket{2},\dots$ is discarded).
 
 %------------------------------------------------------------------
-\section*{Leakage}
-\begin{equation}
-  P_{\text{leak}}(t) = \sum_{n \ge 2} P_n(t), \qquad
-  P_{\text{subspace}} = \braket{P_{01}}
-\end{equation}
+\section*{Rabi oscillations (\texttt{RabiDrive}, \texttt{fit\_rabi})}
+Constant drive $\Omega_R$ at detuning $\delta = \omega_d - \omega_q$; two-level RWA theory and
+the fit of the population of level $\ket{\ell}$:
+\begin{align}
+  \omega_{\rm eff} &= \sqrt{\Omega_R^2 + \delta^2}, \qquad
+  A_{\rm max} = \frac{\Omega_R^2}{\Omega_R^2 + \delta^2} \\
+  P(t) &= \frac{A}{2}\Big(1 - \cos\big(\omega\,(t - t_0)\big)\Big) + B
+\end{align}
+with $A$, $\omega$, $B$ fitted (the initial $\omega$ is the FFT peak of the population).
 
 %------------------------------------------------------------------
-\section*{Spectrum}
+\section*{Spectrum (\texttt{frequency\_spectrum})}
 \begin{align}
   \tilde{s}(\omega) &= \int s(t)\,e^{-\ii\omega t}\,\dd t \\
   \tilde{\Omega}(\omega) &= A\,\sigma\sqrt{2\pi}\;e^{-\sigma^2\omega^2/2} \\
@@ -146,5 +184,410 @@ Square envelope:
   \Delta\omega &\sim \frac{1}{\sigma}, \qquad
   \omega_k = \frac{2\pi k}{N_{\text{fft}}\,\Delta t}
 \end{align}
+
+%==================================================================
+\part*{Flux-tunable transmon and resonator (\texttt{scqubits\_tools.py})}
+\noindent Units in this part: energies $E$ and frequencies $f = E/h$ in GHz,
+angular frequency $\omega = 2\pi f$ in rad/ns, times in ns. $\hbar = 1$.
+
+%------------------------------------------------------------------
+\section*{Flux-tunable transmon (\texttt{scqubits.TunableTransmon}, charge basis)}
+\texttt{make\_transmon}: a transmon whose single junction is replaced by an asymmetric SQUID,
+with external flux $\Phi = \phi_{\rm ext}\Phi_0$ (\texttt{flux} $=\phi_{\rm ext}$) and junction asymmetry $d$:
+\begin{align}
+  E_J(\phi_{\rm ext}) &= E_{J,\max}\sqrt{\cos^2(\pi\phi_{\rm ext}) + d^2\sin^2(\pi\phi_{\rm ext})},
+  \qquad d = \frac{E_{J2} - E_{J1}}{E_{J1} + E_{J2}} \\
+  H &= 4E_C\,(\hat n - n_g)^2 - E_J(\phi_{\rm ext}) \cos\hat\varphi, \qquad [\hat\varphi, \hat n] = \ii \\
+  H &= 4E_C \sum_{n=-n_{\rm cut}}^{n_{\rm cut}} (n - n_g)^2 \ket{n}\!\bra{n}
+     - \frac{E_J}{2}\sum_{n=-n_{\rm cut}}^{n_{\rm cut}-1}
+       \big(\ket{n}\!\bra{n+1} + \ket{n+1}\!\bra{n}\big) \\
+  H\ket{j} &= E_j\ket{j}, \qquad f_{01} = E_1 - E_0, \qquad
+  \alpha = (E_2 - E_1) - (E_1 - E_0) \\
+  f_{01} &\approx \sqrt{8E_J(\phi_{\rm ext})E_C} - E_C, \qquad \alpha \approx -E_C
+  \qquad (E_J/E_C \gg 1)
+\end{align}
+At $\phi_{\rm ext} = 0$ (default) $E_J = E_{J,\max}$, the top sweet spot, where the transmon is
+first-order insensitive to flux; at $\phi_{\rm ext} = \tfrac12$, $E_J = d\,E_{J,\max}$.
+Charge operator in the eigenbasis, used for the capacitive noise, the resonator coupling, the
+coupling between transmons and the drive:
+\begin{align}
+  n_{ij} &= \braket{i|\hat n|j}, \qquad
+  \hat n \approx \ii\, n_{\rm zpf}\,(\ad - a), \qquad
+  n_{\rm zpf} = \frac{1}{\sqrt 2}\left(\frac{E_J}{8E_C}\right)^{1/4} \\
+  \nq &= \frac{\hat n}{|n_{01}|}, \qquad |n_{j,j+1}| \approx \sqrt{j+1}\,|n_{01}|
+\end{align}
+The normalized operator $\nq$ has $|\braket{0|\nq|1}| = 1$.
+
+%------------------------------------------------------------------
+\section*{Readout resonator: Jaynes--Cummings model and dispersive regime}
+\paragraph{Two-level qubit.}
+The qubit is the $0\leftrightarrow1$ transition, $f_q = f_{01}$, coupled to a resonator of
+frequency $f_r$ with coupling $g$. With $\sigma_+ = \ket{1}\!\bra{0}$, $\sigma_- = \ket{0}\!\bra{1}$,
+$\sigma_z = \ket{1}\!\bra{1} - \ket{0}\!\bra{0}$ and $\Delta = f_q - f_r$, the Jaynes--Cummings
+Hamiltonian (rotating-wave approximation, qubit $\otimes$ resonator, constant dropped) is
+\begin{equation}
+  H_{\rm JC} = \frac{f_q}{2}\,\sigma_z \otimes \id_r + \id_q \otimes f_r\,\ad a
+     + g\,\big(\sigma_- \otimes \ad + \sigma_+ \otimes a\big)
+\end{equation}
+The interaction only connects $\ket{1,n}$ and $\ket{0,n+1}$, whose bare energy difference is
+$\Delta$, with matrix element $g\sqrt{n+1}$. For $g\sqrt{n+1}\ll|\Delta|$, second-order
+perturbation theory gives the shifts
+\begin{equation}
+  \delta E_{1,n} = +\chi\,(n+1), \qquad \delta E_{0,n+1} = -\chi\,(n+1), \qquad
+  \chi = \frac{g^2}{\Delta}
+\end{equation}
+and the dispersive Hamiltonian
+\begin{equation}
+  H_{\rm disp} = \frac{f_q + \chi}{2}\,\sigma_z\otimes\id_r
+     + \id_q\otimes f_r\,\ad a + \chi\,\sigma_z\otimes\ad a,
+  \qquad [H_{\rm disp}, \sigma_z\otimes\id_r] = 0
+\end{equation}
+The exchange terms are gone: the qubit state only selects the resonator frequency,
+$f_r^{(0)} = f_r - \chi$, $f_r^{(1)} = f_r + \chi$, and the qubit frequency is pulled to
+$f_q + \chi$ ($n = 0$) with a further $2\chi$ per photon. Valid for $n \ll n_{\rm crit}
+= \Delta^2/4g^2$.
+\paragraph{Multilevel transmon (as implemented).}
+\texttt{Transmon\_Resonator\_Dynamics}: the transmon (all $N$ levels, \texttt{n\_levels}) coupled
+to a resonator (\texttt{scqubits.Oscillator}, $f_r$ = \texttt{f\_res}, $N_r$ photon levels) with
+coupling $g$ of the $0\leftrightarrow1$ transition. The joint space is
+$\mathcal{H}_q \otimes \mathcal{H}_r$, basis $\ket{j}\otimes\ket{n} = \ket{j,n}$, and
+\begin{equation}
+  \Delta_j = (E_{j+1} - E_j) - f_r, \qquad
+  g_j = g\,\frac{|n_{j,j+1}|}{|n_{01}|}, \qquad
+  \chi_j = \frac{g_j^2}{\Delta_j}, \qquad j = 0,\dots,N-2
+\end{equation}
+(\texttt{ladder\_couplings}; $g_0 = g$, $\Delta_0 = f_{01} - f_r$, $g_j \approx \sqrt{j+1}\,g$).
+Generalized Jaynes--Cummings Hamiltonian (\texttt{readout\_hamiltonian()}, rotating-wave
+approximation, $E_j$ measured from $E_0$):
+\begin{equation}
+  H_{\rm JC} = \sum_{j} E_j \ket{j}\!\bra{j} \otimes \id_r
+     \;+\; \id_q \otimes f_r\,\ad a
+     \;+\; \sum_{j=0}^{N-2} g_j\Big(\ket{j}\!\bra{j+1} \otimes \ad + \ket{j+1}\!\bra{j} \otimes a\Big)
+\end{equation}
+Each photon moves the transmon by one rung only, $\ket{j+1,n} \leftrightarrow \ket{j,n+1}$, whose
+bare energy difference is $\Delta_j$ with matrix element $g_j\sqrt{n+1}$. For $N = 2$ this
+reduces to the two-level model above. For $g_j\sqrt{n+1}\ll|\Delta_j|$, second-order perturbation theory: $\ket{j,n}$ is pushed by
+$\ket{j+1,n-1}$ (shift $-n\chi_j$) and by $\ket{j-1,n+1}$ (shift $+(n+1)\chi_{j-1}$), giving the
+diagonal dispersive Hamiltonian (\texttt{dispersive=True}, $\chi_{-1} = 0$):
+\begin{equation}
+  H_{\rm disp} = \sum_{j} \ket{j}\!\bra{j} \otimes
+    \Big[\big(E_j + \chi_{j-1}\big)\,\id_r + \big(f_r + \chi_{j-1} - \chi_j\big)\,\ad a\Big],
+  \qquad [H_{\rm disp}, \ket{j}\!\bra{j}\otimes\id_r] = 0
+\end{equation}
+Level $j$ only selects the resonator frequency $f_r + \chi_{j-1} - \chi_j$. The top level has no
+$j+1$ in the truncated space, so its shift is a truncation artefact and is left unused. The
+readout frequencies and the dispersive shift (\texttt{f\_res\_0}, \texttt{f\_res\_1}, \texttt{chi}):
+\begin{equation}
+  f_r^{(0)} = f_r - \chi_0, \qquad f_r^{(1)} = f_r + \chi_0 - \chi_1, \qquad
+  \chi = \frac{f_r^{(1)} - f_r^{(0)}}{2} = \chi_0 - \frac{\chi_1}{2}
+\end{equation}
+With $g_1 = \sqrt2\,g$ this is Koch et al.'s result
+\begin{equation}
+  \chi = \frac{g^2\,\alpha}{\Delta\,(\Delta + \alpha)}
+  \;\xrightarrow{\;|\Delta| \gg |\alpha|\;}\; \frac{g^2}{\Delta}, \qquad \Delta = f_{01} - f_r
+\end{equation}
+so the two-level $g^2/\Delta$ is reliable only for $|\Delta|\gg|\alpha|$. The dispersive
+approximation needs $n \ll n_{\rm crit}$ (\texttt{n\_crit}):
+\begin{equation}
+  n_{\rm crit} = \frac{\Delta^2}{4g^2}
+\end{equation}
+\paragraph{Numerical check (\texttt{dressed\_frequencies}).}
+Diagonalize a transmon $\otimes$ resonator Hamiltonian and label each eigenvalue $E_{jk}$ by the
+bare state $\ket{j,k}$ with which its eigenvector has the largest overlap:
+\begin{equation}
+  f_{01}^{\rm dressed} = E_{10} - E_{00}, \qquad
+  f_{r}^{(0)} = E_{01} - E_{00}, \qquad
+  f_{r}^{(1)} = E_{11} - E_{10}, \qquad
+  \chi = \frac{f_r^{(1)} - f_r^{(0)}}{2}
+\end{equation}
+\texttt{readout\_summary()} returns this for $H_{\rm JC}$ and for $H_{\rm disp}$, next to the
+analytic $\chi_0 - \chi_1/2$ and $n_{\rm crit}$. The pulses are tuned to $f_{01}^{\rm dressed}$
+(bare $f_{01}$ plus the Lamb shift).
+\paragraph{Purcell limit} (dispersive regime $|\Delta| \gg g$, \texttt{purcell\_t1}):
+\begin{equation}
+  \gamma_{\rm Purcell} = \kappa\left(\frac{g}{\Delta}\right)^{2}, \qquad
+  T_1^{\rm Purcell} = \frac{1}{2\pi\,\kappa\,(g/\Delta)^2}
+\end{equation}
+with $\kappa$ in GHz (the $2\pi$ converts it to an angular rate in rad/ns). It is not one of the
+scqubits noise channels. The simulation obtains it from the resonator decay below, and the
+expected total (\texttt{t1\_expected}, \texttt{t2\_expected}) is
+\begin{equation}
+  \frac{1}{T_1^{\rm exp}} = \frac{1}{T_1} + \frac{1}{T_1^{\rm Purcell}}, \qquad
+  \frac{1}{T_2^{\rm exp}} = \frac{1}{2T_1^{\rm exp}} + \frac{1}{T_\phi}
+\end{equation}
+
+%------------------------------------------------------------------
+\section*{Coherence times (scqubits noise models)}
+Relaxation from Fermi's golden rule, for noise operator $A_{\rm noise}$ and spectral density $S$:
+\begin{align}
+  \frac{1}{T_1^{(c)}} &= \big|\braket{i|A_{\rm noise}|j}\big|^2\,\big[S(\omega_{ij}) + S(-\omega_{ij})\big],
+  \qquad \omega_{ij} = 2\pi\,(E_i - E_j) \\
+  x &= \frac{\hbar\omega}{k_BT}, \qquad
+  \Theta(\omega) = \frac{\coth(|x|/2)}{1 + e^{-x}}
+\end{align}
+Capacitive loss (\texttt{t1\_capacitive}, $A_{\rm noise} = \hat n$, $T = 15$~mK by default):
+\begin{align}
+  S_{\rm cap}(\omega) &= 2\pi\cdot\frac{16\,E_C}{Q_{\rm cap}(\omega)}\;\Theta(\omega), \qquad
+  Q_{\rm cap}(\omega) = 10^{6}\left(\frac{2\pi\cdot 6\,\text{GHz}}{|\omega|}\right)^{0.7}
+\end{align}
+Flux bias line (\texttt{t1\_flux\_bias\_line}, $A_{\rm noise} = \partial H/\partial\Phi$, with
+$M = 400\,\Phi_0/\text{A}$ and $Z = 50\,\Omega$ by default):
+\begin{align}
+  S_{\rm fbl}(\omega) &= 2\,(2\pi)^2\,M^2\,\frac{\hbar\,\omega}{\mathrm{Re}\,Z}\;\Theta(\omega)
+\end{align}
+Its matrix element vanishes at a flux sweet spot of a symmetric SQUID, and grows with
+$\partial f_{01}/\partial\Phi$ away from it.
+Charge-line impedance (\texttt{t1\_charge\_impedance}, $A_{\rm noise} = \hat n$, $Z = 50\,\Omega$):
+\begin{align}
+  S_{Z}(\omega) &= \frac{2\omega}{Q_c}\;\Theta(\omega), \qquad
+  Q_c = \frac{R_K}{8\pi\,\mathrm{Re}\,Z}, \qquad R_K = \frac{h}{e^2}
+\end{align}
+This channel gives $T_1 \approx 0.1$~ns for a transmon, as scqubits assumes direct coupling to
+the line. It is excluded by default, following scqubits' \texttt{effective\_noise\_channels}: the
+default channel set is the supported channels without \texttt{t1\_charge\_impedance}, and
+\texttt{noise\_channels=[...]} overrides it.
+
+Pure dephasing from $1/f$ noise of a parameter $\lambda$ with amplitude $A_\lambda$:
+\begin{align}
+  \frac{1}{T_\phi^{(\lambda)}} &= 2\pi\,A_\lambda\,
+  \Big|\braket{1|\partial_\lambda H|1} - \braket{0|\partial_\lambda H|0}\Big|\,
+  \sqrt{2\,\big|\ln(\omega_{\rm low}\,t_{\rm exp})\big|}
+\end{align}
+with $\lambda = \phi_{\rm ext}$ (flux, \texttt{tphi\_1\_over\_f\_flux}, $A_\Phi = 10^{-6}$),
+$\lambda = E_J$ (critical current, \texttt{tphi\_1\_over\_f\_cc}, $A_{cc} = 10^{-7}$) and
+$\lambda = n_g$ (charge, \texttt{tphi\_1\_over\_f\_ng}, $A_{n_g} = 10^{-4}$),
+$\omega_{\rm low} = 2\pi\cdot 10^{-9}$~GHz, $t_{\rm exp} = 10^{4}$~ns. The flux term is
+proportional to the flux dispersion $\partial f_{01}/\partial\phi_{\rm ext}$ and dominates away
+from the sweet spots $\phi_{\rm ext} = 0, \tfrac12$.
+Channels add as rates:
+\begin{align}
+  \frac{1}{T_1} &= \sum_{c} \frac{1}{T_1^{(c)}}, \qquad
+  \frac{1}{T_\phi} = \sum_{\lambda} \frac{1}{T_\phi^{(\lambda)}}, \qquad
+  \frac{1}{T_2} = \frac{1}{2T_1} + \frac{1}{T_\phi}
+\end{align}
+Because $1/T_\phi \ge 0$, always $T_2 \le 2T_1$. These are computed once, when the dynamics
+object is built (\texttt{coherence\_times}), and stored as \texttt{t1}, \texttt{t\_phi},
+\texttt{t2}; \texttt{noise\_channel\_report} lists every channel with its own $T_1$ or $T_\phi$
+and whether it is included.
+
+%------------------------------------------------------------------
+\section*{Driven dynamics with dissipation (\texttt{Transmon\_Resonator\_Dynamics})}
+A \texttt{TransmonQubit} whose $H_0$, $D$ and collapse operators live in the joint space
+$\mathcal{H}_q\otimes\mathcal{H}_r$ (dimension $N N_r$), lab frame, angular units (rad/ns), so
+the pulses of the first part (envelope, DRAG, $X$/$Y$ gates) and $H(t) = H_0 + s(t)\,D$ apply
+unchanged:
+\begin{align}
+  H_0 &= 2\pi\,H_{\rm JC} \\
+  D &= \nq \otimes \id_r = \sum_{i,j}\frac{n_{ij}}{|n_{01}|}\ket{i}\!\bra{j}\otimes\id_r
+  && \text{(the drive acts on the transmon charge)} \\
+  H(t) &= 2\pi\,H_{\rm JC} + s(t)\,\big(\nq\otimes\id_r\big) \\
+  \omega_q &= 2\pi f_{01}^{\rm dressed}, \qquad \alpha_\omega = 2\pi\,\alpha
+  \qquad \text{(used by the pulse for resonance and DRAG)}
+\end{align}
+Since $|\braket{0|D|1}| = 1$ a pulse of area $\theta$ rotates $0\leftrightarrow1$ by $\theta$; the
+higher matrix elements are the true $n_{ij}$. With the RWA, $L = \mathrm{triu}(D,1)$ contains
+every lowering matrix element, not only nearest neighbours.
+Lindblad operators (so \texttt{apply\_gate} uses \texttt{mesolve}, see the open system above):
+\begin{align}
+  L_j &= \sqrt{\frac{j}{T_1}}\;\ket{j-1}\!\bra{j}\otimes\id_r, \quad j = 1,\dots,N-1
+  && \text{(transmon relaxation)} \\
+  L_\phi &= \sqrt{\frac{1}{2T_\phi}}\,\mathrm{diag}(-1,\,1,\,0,\dots,0)\otimes\id_r
+  && \text{(dephasing of the 0--1 coherence at rate } 1/T_\phi) \\
+  L_\kappa &= \sqrt{2\pi\kappa}\;\id_q\otimes a
+  && \text{(resonator decay, } \kappa \text{ in GHz)}
+\end{align}
+The qubit is slightly hybridized with the resonator, so $L_\kappa$ also relaxes the qubit:
+Purcell decay appears in the simulation by itself. Populations with the other subsystem traced
+out, from the joint $P_{jn} = \braket{j,n|\rho|j,n}$:
+\begin{equation}
+  P_j^{(q)} = \sum_{n} P_{jn}, \qquad P_n^{(r)} = \sum_{j} P_{jn}
+\end{equation}
+Free (undriven) evolution (\texttt{free\_evolution}), in the frame rotating at $f$ (default
+$f_{01}^{\rm dressed}$), with the total excitation number
+$\hat N_{\rm tot} = \hat N\otimes\id_r + \id_q\otimes\ad a$, $\hat N = \sum_j j\ket{j}\!\bra{j}$:
+\begin{equation}
+  H_{\rm free} = H_0 - 2\pi f\,\hat N_{\rm tot}, \qquad
+  \rho(t_{k+1}) = e^{\mathcal{L}_{\rm free}\,\Delta t}\,\rho(t_k)
+\end{equation}
+The JC coupling conserves $\hat N_{\rm tot}$, so this frame is exact and $H_{\rm free}$ stays
+time-independent. The Liouvillian propagator $e^{\mathcal{L}_{\rm free}\Delta t}$ is computed once
+and applied step by step, exact for any length of time.
+
+%------------------------------------------------------------------
+\section*{Simulated $T_1$ and Ramsey ($T_2$) measurements}
+$T_1$: excite $\ket{0,0}$ with a real pulse (default $X(\pi)$, simulated with decoherence), then
+decay freely and fit the transmon population ($t_{\max} = 3T_1^{\rm exp}$):
+\begin{equation}
+  \rho(0) = \rho_{\rm after\ pulse}, \qquad P_1(t) = P^{(q)}_1(t), \qquad
+  P_1^{\rm fit}(t) = a\,e^{-t/T_1}
+\end{equation}
+Ramsey: pulse -- wait $t$ -- pulse, with a real pulse (default $X(\pi/2)$) driven at
+$f_d = f_{01}^{\rm dressed} + \delta$. The pulse runs on $[0, T_p]$ and is simulated once, in the
+lab frame, as a unitary $U$ on the joint space (\texttt{qutip.propagator}); decoherence during the
+pulse is neglected:
+\begin{align}
+  \mathcal{S}[\rho] &= U\rho\,U^{\dagger}, \qquad
+  R = e^{\ii\,2\pi f_d T_p\,\hat N_{\rm tot}} \\
+  \rho_1 &= R\,\mathcal{S}\big[\ket{0,0}\!\bra{0,0}\big]\,R^{\dagger}
+  && \text{(into the frame rotating at } f_d) \\
+  \rho_2(t) &= e^{\mathcal{L}_{\rm free}t}\,\rho_1
+  && \text{(free evolution under } H_{\rm free},\ f = f_d) \\
+  P_1(t) &= \mathrm{Tr}_r\,\braket{1|\,\mathcal{S}\big[\rho_2(t)\big]\,|1}
+\end{align}
+In the frame rotating at $f_d$ the second pulse acts like the first (up to counter-rotating
+terms), so $\mathcal{S}$ is reused for every wait $t$. Fit:
+\begin{align}
+  \delta &= \frac{20}{t_{\max}}, \qquad t_{\max} = 3T_2^{\rm exp} \\
+  P_1^{\rm fit}(t) &= b + a\,e^{-t/T_2}\cos(2\pi\delta\,t + \phi), \qquad
+  b \mp |a|\,e^{-t/T_2} \ \text{(decay envelope)}
+\end{align}
+
+%==================================================================
+\part*{Two coupled transmons (\texttt{two\_transmon\_tools.py})}
+\noindent Same units as the previous part (GHz, rad/ns, ns). Transmon $k = 1,2$ has $d_k$ levels
+(\texttt{truncated\_dim} $\ge 3$), energies $E^{(k)}_j$ measured from $E^{(k)}_0$, and normalized
+charge operator $\nq_k = \hat n_k/|n^{(k)}_{01}|$ in its own eigenbasis. Anharmonicity
+$\alpha_k = E^{(k)}_2 - 2E^{(k)}_1$, bare frequency $f_k = E^{(k)}_1$. The joint space is
+$\mathcal{H}_1\otimes\mathcal{H}_2$, bare states $\ket{j,k} = \ket{j}_1\otimes\ket{k}_2$.
+
+%------------------------------------------------------------------
+\section*{Hamiltonian}
+Capacitive coupling through the charges of the two islands (\texttt{hamiltonian}), with
+$H^{(k)} = \sum_j E^{(k)}_j\ket{j}\!\bra{j}$ and $\hat N_k = \sum_j j\ket{j}\!\bra{j}$ on transmon $k$:
+\begin{equation}
+  \frac{H}{h} = H^{(1)}\otimes\id_2 + \id_1\otimes H^{(2)}
+     + g\,\nq_1\otimes\nq_2 + \delta_2(t)\,\id_1\otimes\hat N_2
+\end{equation}
+Dividing each $\hat n$ by its $0$--$1$ element makes $g$ the coupling of the
+$\ket{1,0}\leftrightarrow\ket{0,1}$ exchange; higher levels couple with their true relative
+matrix elements ($\braket{1|\hat n|2}\approx\sqrt2\braket{0|\hat n|1}$, so $\ket{1,1}\leftrightarrow
+\ket{0,2},\ket{2,0}$ couple with $\sqrt2\,g$) and the counter-rotating terms
+($\ket{0,0}\leftrightarrow\ket{1,1}$) are kept. Dynamics use $H_0 = 2\pi H_{\rm static}$
+($\delta_2 = 0$).
+
+Flux tuning of transmon 2: $\delta_2$ shifts level $j$ by $j\,\delta_2$. This is the first-order
+effect of changing $E_J(\phi_{\rm ext})$: the frequency moves while the anharmonicity
+($\approx -E_C$) stays put,
+\begin{equation}
+  f_2 \to f_2 + \delta_2, \qquad
+  \delta_2 \approx \frac{\partial f_{01}}{\partial\phi_{\rm ext}}\,\Delta\phi_{\rm ext},
+  \qquad \alpha_2 \ \text{unchanged}
+\end{equation}
+good for excursions of a few hundred MHz.
+Lindblad operators of each transmon $k$ (from \texttt{transmon\_coherence}, the same noise
+models as in the single-transmon part), on the joint space:
+\begin{align}
+  L^{(1)}_j &= \sqrt{\frac{j}{T_1^{(1)}}}\;\ket{j-1}\!\bra{j}\otimes\id_2, \qquad
+  L^{(2)}_j = \sqrt{\frac{j}{T_1^{(2)}}}\;\id_1\otimes\ket{j-1}\!\bra{j} \\
+  L^{(1)}_\phi &= \sqrt{\frac{1}{2T_\phi^{(1)}}}\,\mathrm{diag}(-1,1,0,\dots)\otimes\id_2, \qquad
+  L^{(2)}_\phi = \sqrt{\frac{1}{2T_\phi^{(2)}}}\,\id_1\otimes\mathrm{diag}(-1,1,0,\dots)
+\end{align}
+Driven by a pulse on transmon $k$ (\texttt{apply\_gate}), through its charge, lab frame, no RWA:
+\begin{align}
+  H(t) &= H_0 + s(t)\,D_k, \qquad
+  D_1 = \nq_1\otimes\id_2, \qquad D_2 = \id_1\otimes\nq_2 \\
+  \omega_d &= 2\pi f_k^{\rm dressed}\ \text{(other qubit in } \ket{0})
+\end{align}
+Joint and marginal populations:
+\begin{equation}
+  P_{jk} = \braket{j,k|\rho|j,k}, \qquad
+  P^{(1)}_j = \sum_k P_{jk}, \qquad P^{(2)}_k = \sum_j P_{jk}
+\end{equation}
+
+%------------------------------------------------------------------
+\section*{Dressed spectrum and ZZ}
+The dressed state $\ket{\widetilde{jk}}$ is the eigenstate of $H(\delta_2)$ with the largest overlap
+with the bare $\ket{j,k}$, with its phase fixed so that this overlap is real and positive
+(\texttt{dressed\_states}); $E_{jk}$ is its energy. Dressed transition frequencies
+(\texttt{spectrum\_summary}):
+\begin{align}
+  f_1 &= E_{10} - E_{00}, \qquad f_2 = E_{01} - E_{00} \qquad \text{(other qubit in } \ket{0}) \\
+  f_1^{(2\,{\rm exc})} &= E_{11} - E_{01}, \qquad f_2^{(1\,{\rm exc})} = E_{11} - E_{10} \\
+  \mathrm{ZZ} &= E_{11} - E_{10} - E_{01} + E_{00} = f_1^{(2\,{\rm exc})} - f_1
+\end{align}
+Second-order analytic ZZ (\texttt{zz\_analytic}): $\ket{1,1}$ is pushed by $\ket{2,0}$ and
+$\ket{0,2}$ (couplings $\sqrt2\,g$) while the $\ket{1,0}$, $\ket{0,1}$ shifts cancel,
+\begin{equation}
+  \mathrm{ZZ} = \frac{2g^2\,(\alpha_1 + \alpha_2)}{(D + \alpha_1)(D - \alpha_2)}, \qquad
+  D = f_1 - (f_2 + \delta_2)
+\end{equation}
+It diverges at $D = -\alpha_1$ ($\ket{1,1}\approx\ket{2,0}$) and $D = \alpha_2$
+($\ket{1,1}\approx\ket{0,2}$).
+Anticrossing of $\ket{1,0}$ and $\ket{0,1}$ at $f_2 + \delta_2 = f_1$, with gap $2g$.
+Check (\texttt{scqubits\_check}): the same system built with \texttt{scqubits.HilbertSpace},
+$H = H^{(1)}\otimes\id_2 + \id_1\otimes H^{(2)} + g_{\rm raw}\,\hat n_1\otimes\hat n_2$ with
+\begin{equation}
+  g_{\rm raw} = \frac{g}{|n^{(1)}_{01}|\,|n^{(2)}_{01}|}
+\end{equation}
+
+%------------------------------------------------------------------
+\section*{Swap oscillations}
+Start in $\ket{1,0}$ with transmon 2 tuned onto transmon 1 ($\delta_2 = f_1 - f_2$), undriven:
+\begin{equation}
+  P_{10}(t) = \cos^2(2\pi g\,t), \qquad P_{01}(t) = \sin^2(2\pi g\,t), \qquad
+  T_{\rm swap} = \frac{1}{4g}, \qquad T_{\rm period} = \frac{1}{2g}
+\end{equation}
+(default window: 3 periods), with $g$ in GHz and $t$ in ns.
+
+%------------------------------------------------------------------
+\section*{Two-qubit gates by flux pulses}
+Flux pulse on transmon 2 (\texttt{flux\_pulse}), cosine ramps of length $t_{\rm ramp}$ and a flat
+top $t_{\rm flat}$ at $\delta_2 = \delta$, $t_{\rm tot} = t_{\rm flat} + 2t_{\rm ramp}$:
+\begin{equation}
+  \delta_2(t) = \delta\cdot\begin{cases}
+    \tfrac12\big[1 - \cos(\pi t/t_{\rm ramp})\big] & t < t_{\rm ramp} \\
+    1 & t_{\rm ramp} \le t \le t_{\rm ramp} + t_{\rm flat} \\
+    \tfrac12\big[1 - \cos\big(\pi(t_{\rm tot} - t)/t_{\rm ramp}\big)\big] & t > t_{\rm ramp} + t_{\rm flat}
+  \end{cases}
+\end{equation}
+with the pulse Hamiltonian
+\begin{equation}
+  H(t) = 2\pi\Big[H_{\rm static} + \delta_2(t)\,\id_1\otimes\hat N_2\Big]
+\end{equation}
+\paragraph{Calibration (\texttt{calibrate}).}
+The operating point is the $\delta_2$ where the two relevant states anticross, found by
+minimizing their dressed splitting $\Delta E_{\min}$ (the bare-energy guess is off by the level
+shifts from the coupling); the guess and the time on resonance:
+\begin{align}
+  \text{CZ:} \quad & \ket{1,1}\leftrightarrow\ket{0,2}, \quad \text{coupling} \approx \sqrt2\,g, \quad
+  \delta_2^{\rm guess} = E^{(1)}_1 + E^{(2)}_1 - E^{(2)}_2, \quad t_{\rm on} = \frac{1}{\Delta E_{\min}} \\
+  \text{iSWAP:} \quad & \ket{1,0}\leftrightarrow\ket{0,1}, \quad \text{coupling} = g, \quad
+  \delta_2^{\rm guess} = E^{(1)}_1 - E^{(2)}_1, \quad t_{\rm on} = \frac{1}{2\Delta E_{\min}}
+\end{align}
+A full cycle ($t = 1/\Delta E_{\min}$) returns $\ket{1,1}$ to itself with a $-1$ sign (CZ); half a
+cycle swaps $\ket{1,0}$ and $\ket{0,1}$ with a factor $\ii$ (iSWAP). \texttt{tune\_gate} scans
+$t_{\rm flat}$ around $t_{\rm on} - t_{\rm ramp}$ by $\pm$\texttt{span} (the cosine ramps add
+about half their length on resonance) and keeps the best fidelity.
+\paragraph{Gate unitary and quality (\texttt{gate\_unitary}, \texttt{gate\_metrics}).}
+Closed-system propagator of the pulse, restricted to the dressed computational states
+$\ket{d_i}\in\{\ket{\widetilde{00}},\ket{\widetilde{01}},\ket{\widetilde{10}},\ket{\widetilde{11}}\}$:
+\begin{equation}
+  U = \mathcal{T}\exp\!\left[-\ii\!\int_0^{t_{\rm tot}} H(t')\,\dd t'\right], \qquad
+  M_{ij} = \braket{d_i|U|d_j}
+\end{equation}
+Target gates, in the basis $\ket{00},\ket{01},\ket{10},\ket{11}$:
+\begin{equation}
+  \mathrm{CZ} = \mathrm{diag}(1,1,1,-1), \qquad
+  \mathrm{iSWAP} = \begin{pmatrix} 1&0&0&0 \\ 0&0&\ii&0 \\ 0&\ii&0&0 \\ 0&0&0&1 \end{pmatrix}
+\end{equation}
+Free single-qubit $Z$ rotations before and after (virtual $Z$ gates, which also absorb the
+lab-frame dynamic phases), $Z(a,b) = \mathrm{diag}\big(1,\,e^{\ii b},\,e^{\ii a},\,e^{\ii(a+b)}\big)$
+(\texttt{local\_z}), with $V = Z(a_2,b_2)\,G\,Z(a_1,b_1)$ for target $G$:
+\begin{align}
+  F &= \max_{a_1,b_1,a_2,b_2}\;\frac{\big|\mathrm{Tr}(V^{\dagger}M)\big|^2 + \mathrm{Tr}(M^{\dagger}M)}{20}
+  && \text{(average gate fidelity)} \\
+  \text{leakage} &= 1 - \frac{\mathrm{Tr}(M^{\dagger}M)}{4}
+  && \text{(population lost from the subspace)} \\
+  \phi_{\rm cond} &= \phi_{00} - \phi_{01} - \phi_{10} + \phi_{11}, \qquad
+  \phi_{ij} = \arg M_{ii}
+  && (\pi \text{ for CZ})
+\end{align}
+\paragraph{Decoherence alone (\texttt{run\_flux\_pulse}).}
+Same pulse with the Lindblad operators (\texttt{mesolve}), from $\ket{++} = \tfrac12\sum_{jk}\ket{j,k}$
+($j,k\in\{0,1\}$); the effect of decoherence is the state fidelity to the closed-system result
+$\ket{\psi_{\rm closed}} = U\ket{++}$:
+\begin{equation}
+  F_{\rm noise} = \braket{\psi_{\rm closed}|\rho(t_{\rm tot})|\psi_{\rm closed}}
+\end{equation}
 
 \end{document}
