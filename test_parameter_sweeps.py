@@ -29,6 +29,7 @@ import time
 
 import numpy as np
 import matplotlib.pyplot as plt
+import qutip as qt
 import scipy.constants as sc
 import scqubits as scq
 from scipy.optimize import least_squares
@@ -163,10 +164,24 @@ def fig_transmon_levels(run_dir, quick):
 
 # ------------------------------------------------------ 02 resonator-coupled levels
 
-def joint_levels(n_show=10, **kw):
+# bare states |transmon level q, photon number n> whose dressed energies are tracked and labelled
+TRACKED_STATES = [(1, 0), (2, 0), (0, 1), (1, 1), (2, 1), (0, 2), (1, 2), (2, 2)]
+
+
+def joint_levels(**kw):
+    """Dressed energies (GHz, relative to the dressed |0,0>) of the tracked bare states.
+
+    Each bare state |q, n> is followed through the sweep as the eigenstate of the full
+    transmon + resonator Hamiltonian with the largest overlap with it, so every curve keeps
+    its label through the avoided crossings.
+    """
     dyn = build(**kw)
-    e = np.sort(np.real(dyn.readout_hamiltonian().eigenenergies()))
-    return e[:n_show] - e[0]
+    n_q, n_r = BASE['n_levels'], BASE['n_res']
+    evals, evecs = dyn.readout_hamiltonian().eigenstates()
+    bare = lambda q, n: qt.tensor(qt.basis(n_q, q), qt.basis(n_r, n))
+    dressed = lambda q, n: evals[int(np.argmax([abs(bare(q, n).overlap(v)) for v in evecs]))]
+    e0 = dressed(0, 0)
+    return [dressed(q, n) - e0 for q, n in TRACKED_STATES]
 
 
 def fig_resonator_levels(run_dir, quick):
@@ -174,13 +189,19 @@ def fig_resonator_levels(run_dir, quick):
     panels = [('f_res', np.linspace(3, 11, n_pts), 'resonator frequency f_res (GHz)'),
               ('g', np.linspace(0.0, 0.4, n_pts), 'coupling g (GHz)'),
               ('flux', np.linspace(0, 0.5, n_pts), 'flux (Φ0)')]
-    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+    colors = plt.cm.tab10(np.arange(len(TRACKED_STATES)))
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6.5))
     for ax, (name, xs, xl) in zip(axes, panels):
         e = np.array([joint_levels(**{name: x}) for x in xs])
-        ax.plot(xs, e[:, 1:], lw=1)
-        ax.set(xlabel=xl, ylabel='E - E_ground (GHz)',
+        for k, (q, n) in enumerate(TRACKED_STATES):
+            ax.plot(xs, e[:, k], lw=1.4, color=colors[k], label=f'|{q},{n}⟩')
+        ax.set(xlabel=xl, ylabel='E - E(|0,0⟩) (GHz)',
                title=f'transmon ⊗ resonator levels vs {name}\n(avoided crossings at f01 = f_res)')
         ax.grid(alpha=0.3)
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 0.0), ncol=len(labels),
+               title='|q, n⟩ = dominant bare state: transmon level q, n resonator photons '
+                     '(tracked through the avoided crossings)')
     save_fig(fig, run_dir, '02_energy_levels_resonator.png')
 
 
@@ -239,12 +260,12 @@ def plot_sweep(run_dir, param, rec, xlabel, xlog=False):
     fig, ax = plt.subplots(2, 3, figsize=(18, 9.5))
     ax = ax.ravel()
 
-    ax[0].plot(x, rec['f01'], label='bare f01 (scqubits)')
+    ax[0].plot(x, rec['f01'], label='bare f01 (numerical diagonalization)')
     ax[0].plot(x, rec['f01_koch'], '--', label='theory sqrt(8 EJ EC) - EC')
     ax[0].plot(x, rec['f01_dressed'], label='dressed f01 (JC)')
     ax[0].set(ylabel='f01 (GHz)', title='qubit frequency')
 
-    ax[1].plot(x, 1e3 * (rec['f01'] - rec['f01_koch']), label='bare: scqubits - Koch')
+    ax[1].plot(x, 1e3 * (rec['f01'] - rec['f01_koch']), label='bare: numerical - Koch theory')
     ax[1].plot(x, 1e3 * (rec['f01_dressed'] - rec['f01_pert2']), label='dressed: JC - (f01 + g²/Δ)')
     ax[1].plot(x, 1e3 * (rec['f01_dressed'] - rec['f01_jc_exact']), '--',
                label='dressed: JC - exact 2-level JC')
@@ -258,7 +279,7 @@ def plot_sweep(run_dir, param, rec, xlabel, xlog=False):
     for k in rec:
         if k.startswith('t1_') and k not in ('t1_purcell', 't1_expected'):
             ax[3].plot(x, finite(rec[k]) / 1e3, ':', label=k)
-    ax[3].plot(x, finite(rec['t1']) / 1e3, 'k-', label='T1 scqubits total')
+    ax[3].plot(x, finite(rec['t1']) / 1e3, 'k-', label='T1 total (noise models, no Purcell)')
     ax[3].plot(x, finite(rec['t1_purcell']) / 1e3, 'r--', label='T1 Purcell')
     ax[3].plot(x, finite(rec['t1_expected']) / 1e3, 'b-', lw=2, label='T1 expected (both)')
     ax[3].set(ylabel='T1 (µs)', yscale='log', title='relaxation')
@@ -269,7 +290,7 @@ def plot_sweep(run_dir, param, rec, xlabel, xlog=False):
     ax[4].plot(x, finite(rec['t_phi']) / 1e3, 'k-', label='T_phi total')
     ax[4].set(ylabel='T_phi (µs)', yscale='log', title='pure dephasing')
 
-    ax[5].plot(x, finite(rec['t2']) / 1e3, 'k-', label='T2 scqubits')
+    ax[5].plot(x, finite(rec['t2']) / 1e3, 'k-', label='T2 (noise models, no Purcell)')
     ax[5].plot(x, finite(rec['t2_expected']) / 1e3, 'b-', lw=2, label='T2 expected (with Purcell)')
     ax[5].plot(x, 2 * finite(rec['t1_expected']) / 1e3, 'r:', label='2 T1 limit')
     ax[5].set(ylabel='T2 (µs)', yscale='log', title='decoherence')
@@ -348,14 +369,14 @@ def fig_theory_vs_calc(run_dir, results, quick):
 
     fig, axes = plt.subplots(1, 3, figsize=(18, 5.5))
     ax = axes[0]
-    ax.plot(ratio, num, label='scqubits (numerical)')
+    ax.plot(ratio, num, label='numerical (diagonalization)')
     ax.plot(ratio, koch, '--', label='theory sqrt(8 EJ EC) - EC')
     ax.set(xlabel='EJ/EC', ylabel='f01 (GHz)', title='bare f01 (EC = 0.25 GHz, ng = 0)')
     ax.legend()
     ax.grid(alpha=0.3)
     err = (num - koch) * 1e3
     ax.twinx().plot(ratio, err, 'r:', label='error (MHz)')
-    axes[0].set_title('bare f01; red dotted: scqubits - theory (MHz, right axis)')
+    axes[0].set_title('bare f01 vs EJ/EC; red dotted: numerical - theory (MHz, right axis)')
 
     # dressed f01 vs g
     g_rec = results['g']
@@ -400,9 +421,9 @@ def fig_simulated_t1(run_dir, quick):
             sim.append(t1_fit / 1e3)
             exp.append(dyn.t1_expected / 1e3)
             lines.append(f'{name}={v:g}: T1 fit = {t1_fit / 1e3:.2f} us, expected = '
-                         f'{dyn.t1_expected / 1e3:.2f} us, scqubits only = {dyn.t1 / 1e3:.2f} us')
+                         f'{dyn.t1_expected / 1e3:.2f} us, noise models only = {dyn.t1 / 1e3:.2f} us')
             print('    ' + lines[-1])
-        ax.plot(vals, exp, 'bo-', label='expected (scqubits + Purcell)')
+        ax.plot(vals, exp, 'bo-', label='expected (noise-model T1 + Purcell)')
         ax.plot(vals, sim, 'rx--', label='master-equation fit')
         ax.set(xlabel=name, ylabel='T1 (µs)', xscale='log' if name == 'kappa' else 'linear',
                yscale='log', title=f'simulated T1 vs {name}')
@@ -573,8 +594,8 @@ def fit_noise_channel(name, spec):
 def fig_noise_eval(run_dir, quick):
     specs = noise_channel_specs(quick)
     fits, lines, rows = [], [], []
-    lines += ['Noise channel evaluation: software (scqubits) vs closed-form theory',
-              'rms = rms of log10(theory/scqubits): 0.02 ~ 5 %, 0.1 ~ 26 %;  fit started at 0.5 x default', '']
+    lines += ['Noise channel evaluation: software vs closed-form theory',
+              'rms = rms of log10(theory/software): 0.02 ~ 5 %, 0.1 ~ 26 %;  fit started at 0.5 x default', '']
     for name, spec in specs.items():
         print(f'  fitting {name}...')
         try:
@@ -596,7 +617,7 @@ def fig_noise_eval(run_dir, quick):
             x = pt[var]
             t_scq = 1 / np.where(rates > 0, rates, np.nan) / 1e3
             t_fit = 1 / r['model'](pt, r['fit']) / 1e3
-            ax.plot(x, t_scq, 'ko', ms=5, label='software evaluation (scqubits)')
+            ax.plot(x, t_scq, 'ko', ms=5, label='software evaluation')
             ax.plot(x, 1 / r['model'](pt, r['default']) / 1e3, 'b--', label='theory, default constants')
             ax.plot(x, t_fit, 'r-', label='theory, constants matched to software')
             ax.set(ylabel=f'{label} (µs)', yscale='log', title=f'{label} vs {var}')
@@ -613,7 +634,7 @@ def fig_noise_eval(run_dir, quick):
         save_fig(fig, run_dir, f'08_noise_eval_{name}.png')
         lines += [f'{name}', f'  formula: {spec["formula"]}']
         for k, v, d in zip(r['names'], r['fit'], r['default']):
-            lines.append(f'  {k}: implied by software {v:.4g}, scqubits default {d:.4g}, ratio {v / d:.3f}')
+            lines.append(f'  {k}: implied by software {v:.4g}, documented default {d:.4g}, ratio {v / d:.3f}')
             rows.append([name, k, d, v, v / d, r['rms_default'], r['rms_fit'], r['r2']])
         lines.append(f'  log10 error rms: {r["rms_default"]:.3f} with defaults -> {r["rms_fit"]:.3f} with matched constants '
                      f'(max {r["max_fit"]:.3f}), R² = {r["r2"]:.5f}, {r["n_points"]} points'
@@ -621,7 +642,7 @@ def fig_noise_eval(run_dir, quick):
 
     with open(os.path.join(run_dir, 'noise_eval.csv'), 'w', newline='') as f:
         w = csv.writer(f)
-        w.writerow(['channel', 'constant', 'scqubits_default', 'matched_to_software', 'ratio', 'rms_log10_default',
+        w.writerow(['channel', 'constant', 'documented_default', 'matched_to_software', 'ratio', 'rms_log10_default',
                     'rms_log10_fit', 'R2'])
         w.writerows([[row[0], row[1]] + [f'{v:.6g}' for v in row[2:]] for row in rows])
     return lines
@@ -640,7 +661,7 @@ def write_summary(run_dir, results, ratio, koch_err, sim_lines, elapsed):
                  f'{d("f01_dressed", "f01_jc_exact"):17.4f}')
     L += ['', f'Bare f01 vs sqrt(8 EJ EC) - EC over EJ/EC = {ratio[0]:.0f}..{ratio[-1]:.0f} (d=0):',
           f'  error {koch_err[0] * 1e3:.1f} MHz at EJ/EC={ratio[0]:.0f}, '
-          f'{koch_err[-1] * 1e3:.1f} MHz at EJ/EC={ratio[-1]:.0f} (scqubits - theory)',
+          f'{koch_err[-1] * 1e3:.1f} MHz at EJ/EC={ratio[-1]:.0f} (numerical - theory)',
           '', 'Notes:',
           '  - dressed vs exact JC should be ~0: |1,0> only couples to |0,1>, so the single-excitation',
           '    block of the multilevel model is exactly the 2-level JC (differences = state labelling',
