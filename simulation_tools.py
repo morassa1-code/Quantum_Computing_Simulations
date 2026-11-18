@@ -118,7 +118,7 @@ class DrivePulse:
     """
 
     def __init__(self, angle=np.pi, phase=0.0, sigma=10.0, n_sigma=4,
-                 sample_rate=200.0, drive_frequency=None, drag_coeff=0.0):
+                 sample_rate=200.0, drive_frequency=None, drag_coeff=0.0, **kwargs):
         """
         Parameters
         ----------
@@ -153,7 +153,13 @@ class DrivePulse:
         self.deriviate_modulated_signal = None  # envelope derivative used for DRAG
         self.complex_envelope = None  # set by generate_drive_signal(): Omega_x - i*Omega_y, used by the RWA
         self.drive_phase = None  # set by generate_drive_signal(): w_d*t + phase
-  
+        if 't_rise' in kwargs and 't_fall' in kwargs:
+            self.t_rise = kwargs['t_rise']
+            self.t_fall = kwargs['t_fall']
+        else:
+            self.t_rise = None
+            self.t_fall = None
+
     @property
     def envelope_duration(self):
         return 2 * self.n_sigma * self.sigma
@@ -162,12 +168,32 @@ class DrivePulse:
     def envelope_amplitude(self):
         return self.angle / (self.sigma * np.sqrt(2 * np.pi))
 
-    def envelope(self, t, t0=0.0, shape='gaussian'):
+    def envelope(self, t, t0=0.0, shape=None):
+        """
+        shape=None: 'square' (trapezoid) if t_rise and t_fall were given, else 'gaussian'.
+        The square envelope has linear ramps of length t_rise / t_fall inside the
+        pulse window and a flat top; its amplitude is set so that the area is `angle`.
+        """
+        if shape is None:
+            shape = 'square' if self.t_rise is not None and self.t_fall is not None else 'gaussian'
         if shape == 'gaussian':
             return self.envelope_amplitude * np.exp(-(t - t0) ** 2 / (2 * self.sigma ** 2))
         elif shape == 'square':
-            return self.envelope_amplitude * np.where(
-                np.abs(t - t0) <= self.n_sigma * self.sigma, 1.0, 0.0)
+            if self.t_rise is None or self.t_fall is None:
+                raise ValueError("For square envelope, t_rise and t_fall must be provided")
+            t_rise, t_fall = self.t_rise, self.t_fall
+            t_start = t0 - self.envelope_duration / 2
+            t_end = t0 + self.envelope_duration / 2
+            # trapezoid area = A * (T - (t_rise + t_fall) / 2) = angle
+            amp = self.angle / (self.envelope_duration - 0.5 * (t_rise + t_fall))
+            env = np.zeros_like(t, dtype=float)
+            rise = (t >= t_start) & (t < t_start + t_rise)
+            flat = (t >= t_start + t_rise) & (t < t_end - t_fall)
+            fall = (t >= t_end - t_fall) & (t <= t_end)
+            env[rise] = amp * (t[rise] - t_start) / t_rise
+            env[flat] = amp
+            env[fall] = amp * (t_end - t[fall]) / t_fall
+            return env
         else:
             raise ValueError("Unsupported envelope shape")
 
