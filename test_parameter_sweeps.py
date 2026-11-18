@@ -45,6 +45,23 @@ scq.settings.PROGRESSBAR_DISABLED = True
 BASE = dict(ej=30.0, ec=0.25, flux=0.0, d=0.1, ng=0.0,
             f_res=5.0, g=0.1, kappa=0.001, n_levels=4, n_res=12, ncut=30)
 
+# The range of every parameter, used by every figure (low, high).
+RANGES = dict(flux=(0.0, 2.5),    # flux quanta
+              ej=(20.0, 60.0),    # GHz
+              ec=(0.15, 1.5),     # GHz
+              ng=(0.0, 1.0),      # offset charge
+              g=(0.02, 1.0),      # GHz
+              kappa=(1e-4, 1e-1),  # GHz, log-spaced
+              f_res=(3.0, 11.0),  # GHz
+              d=(0.02, 0.5))      # SQUID asymmetry
+
+
+def grid(name, n):
+    """n points over RANGES[name] (log-spaced for kappa)."""
+    lo, hi = RANGES[name]
+    return np.logspace(np.log10(lo), np.log10(hi), n) if name == 'kappa' else np.linspace(lo, hi, n)
+
+
 OUT_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'test_results')
 
 
@@ -146,10 +163,10 @@ def fig_transmon_levels(run_dir, quick):
         e = t.eigenvals(n)
         return e - e[0]
 
-    panels = [('flux', np.linspace(0, 0.5, n_pts), 'flux (Φ0)'),
-              ('ej', np.linspace(5, 60, n_pts), 'EJ (GHz)'),
-              ('ec', np.linspace(0.1, 0.6, n_pts), 'EC (GHz)'),
-              ('ng', np.linspace(-1, 1, n_pts), 'offset charge ng')]
+    panels = [('flux', grid('flux', n_pts), 'flux (Φ0)'),
+              ('ej', grid('ej', n_pts), 'EJ (GHz)'),
+              ('ec', grid('ec', n_pts), 'EC (GHz)'),
+              ('ng', grid('ng', n_pts), 'offset charge ng')]
     fig, axes = plt.subplots(2, 2, figsize=(12, 9))
     for ax, (name, xs, xl) in zip(axes.ravel(), panels):
         e = np.array([levels(**{name: x}) for x in xs])
@@ -186,9 +203,9 @@ def joint_levels(**kw):
 
 def fig_resonator_levels(run_dir, quick):
     n_pts = 40 if quick else 100
-    panels = [('f_res', np.linspace(3, 11, n_pts), 'resonator frequency f_res (GHz)'),
-              ('g', np.linspace(0.0, 0.4, n_pts), 'coupling g (GHz)'),
-              ('flux', np.linspace(0, 0.5, n_pts), 'flux (Φ0)')]
+    panels = [('f_res', grid('f_res', n_pts), 'resonator frequency f_res (GHz)'),
+              ('g', grid('g', n_pts), 'coupling g (GHz)'),
+              ('flux', grid('flux', n_pts), 'flux (Φ0)')]
     colors = plt.cm.tab10(np.arange(len(TRACKED_STATES)))
     fig, axes = plt.subplots(1, 3, figsize=(18, 6.5))
     for ax, (name, xs, xl) in zip(axes, panels):
@@ -209,7 +226,7 @@ def fig_resonator_levels(run_dir, quick):
 
 def fig_spectroscopy(run_dir, quick):
     n_pts = 60 if quick else 201
-    fluxes = np.linspace(0, 0.5, n_pts)
+    fluxes = grid('flux', n_pts)
     n = BASE['n_levels']
     lines = np.zeros((n_pts, n - 1))      # E_j - E_0
     weights = np.zeros((n_pts, n - 1))    # |<0|n|j>|^2
@@ -308,13 +325,13 @@ def plot_sweep(run_dir, param, rec, xlabel, xlog=False):
 def run_sweeps(run_dir, quick):
     s = (lambda full, small: small if quick else full)
     sweeps = [
-        ('flux', np.linspace(0, 2.5, s(36, 11)), 'flux (Φ0)', False),
-        ('ej', np.linspace(20, 60, s(21, 9)), 'EJ (GHz)', False),
-        ('ec', np.linspace(0.15, 1.5, s(18, 8)), 'EC (GHz)', False),
-        ('ng', np.linspace(0, 1, s(11, 6)), 'offset charge ng', False),
-        ('g', np.linspace(0.02, 1, s(15, 8)), 'g (GHz)', False),
-        ('kappa', np.logspace(-4, -1, s(13, 7)), 'kappa (GHz)', True),
-        ('f_res', np.linspace(3, 11, s(15, 8)), 'f_res (GHz)', False),
+        ('flux', grid('flux', s(36, 11)), 'flux (Φ0)', False),
+        ('ej', grid('ej', s(21, 9)), 'EJ (GHz)', False),
+        ('ec', grid('ec', s(18, 8)), 'EC (GHz)', False),
+        ('ng', grid('ng', s(11, 6)), 'offset charge ng', False),
+        ('g', grid('g', s(15, 8)), 'g (GHz)', False),
+        ('kappa', grid('kappa', s(13, 7)), 'kappa (GHz)', True),
+        ('f_res', grid('f_res', s(15, 8)), 'f_res (GHz)', False),
     ]
     results = {}
     for param, values, xlabel, xlog in sweeps:
@@ -331,8 +348,8 @@ def run_sweeps(run_dir, quick):
 # --------------------------------------------------------------- 05 2D map
 
 def fig_map(run_dir, quick):
-    fluxes = np.linspace(0, 0.45, 8 if quick else 12)
-    ecs = np.linspace(0.15, 0.5, 6 if quick else 9)
+    fluxes = grid('flux', 8 if quick else 12)
+    ecs = grid('ec', 6 if quick else 9)
     names = ['f01', 't1', 't_phi', 't2']
     grids = {k: np.full((len(ecs), len(fluxes)), np.nan) for k in names}
     for i, ec in enumerate(ecs):
@@ -511,13 +528,18 @@ def th_tphi_ng(pt, a_ng):
 _OP = dict(ej=30.0, ec=0.25, flux=0.2, d=0.1, ng=0.0)
 
 
+def _r(name, count):
+    """(low, high, count) of RANGES[name], for _sweeps."""
+    return (*RANGES[name], count)
+
+
 def _sweeps(quick, **ranges):
     n = (lambda full: max(6, full // 2) if quick else full)
     return {k: np.linspace(lo, hi, n(cnt)) for k, (lo, hi, cnt) in ranges.items()}
 
 
 def noise_channel_specs(quick):
-    common = dict(ej=(20, 60, 17), ec=(0.15, 0.5, 15), flux=(0.0, 0.45, 16), d=(0.02, 0.5, 14))
+    common = dict(ej=_r('ej', 17), ec=_r('ec', 15), flux=_r('flux', 41), d=_r('d', 14))
     return {
         't1_capacitive': dict(
             theory=th_capacitive, params=dict(Q_cap0=1e6, power=0.7), op=_OP,
@@ -534,16 +556,17 @@ def noise_channel_specs(quick):
             formula='Γ = |<0|n|1>|² · 2 ω / Q_c · coth(hf/2kT),   Q_c = R_k / (8π Z)'),
         'tphi_1_over_f_flux': dict(
             theory=th_tphi_flux, params=dict(A_flux=NOISE_PARAMS['A_flux']), op=_OP,
-            sweeps=_sweeps(quick, ej=(20, 60, 17), ec=(0.15, 0.5, 15), flux=(0.02, 0.48, 16), d=(0.02, 0.5, 14)),
+            sweeps=_sweeps(quick, **common),
             formula='Γφ = 2π A_flux sqrt(2|ln(ω_low t_exp)|) |∂f01/∂Φ|'),
         'tphi_1_over_f_cc': dict(
             theory=th_tphi_cc, params=dict(A_cc=NOISE_PARAMS['A_cc']), op=_OP,
-            sweeps=_sweeps(quick, ej=(20, 60, 17), ec=(0.15, 0.5, 15), flux=(0.0, 0.45, 16)),
+            sweeps=_sweeps(quick, ej=_r('ej', 17), ec=_r('ec', 15), flux=_r('flux', 41)),
             formula='Γφ = 2π A_cc sqrt(2|ln(ω_low t_exp)|) |∂f01/∂EJ|,   ∂f01/∂EJ = sqrt(2 EC / EJ)'),
         'tphi_1_over_f_ng': dict(
             theory=th_tphi_ng, params=dict(A_ng=NOISE_PARAMS['A_ng']),
             op=dict(ej=8.0, ec=0.25, flux=0.0, d=0.1, ng=0.25),  # low EJ/EC: measurable charge dispersion
-            sweeps=_sweeps(quick, ej=(5, 12, 15), ec=(0.2, 0.5, 13), flux=(0.0, 0.3, 10), ng=(0.02, 0.45, 15)),
+            sweeps=_sweeps(quick, ej=(5, 12, 15),  # exception: charge dispersion needs a low EJ/EC
+                           ec=_r('ec', 13), flux=_r('flux', 41), ng=_r('ng', 21)),
             formula='Γφ = 2π A_ng sqrt(2|ln(ω_low t_exp)|) π |ε1 - ε0| |sin 2π ng|,  '
                     'ε_m = (-1)^m EC 2^(4m+5)/m! sqrt(2/π) (EJ/2EC)^(m/2+3/4) exp(-sqrt(8 EJ/EC))'),
     }
@@ -566,7 +589,7 @@ def fit_noise_channel(name, spec):
 
     all_pt = {k: np.concatenate([d[0][k] for d in data.values()]) for k in spec['op']}
     all_rate = np.concatenate([d[1] for d in data.values()])
-    ok = np.isfinite(all_rate) & (all_rate > 1e-30)  # drop exact zeros (e.g. sweet spots)
+    ok = np.isfinite(all_rate) & (all_rate > 1e-10 * np.nanmax(all_rate))  # drop sweet spots (numerical zeros)
     names = list(spec['params'])
     p0 = np.array([spec['params'][k] for k in names], dtype=float)
 
