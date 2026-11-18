@@ -451,7 +451,7 @@ class Transmon_Resonator_Dynamics(TransmonQubit):
         """
         t_max = t_max or 3 * self.t2_expected
         detuning = detuning or 20.0 / t_max
-        pulse = XGate(np.pi / 2) if pulse is None else copy.copy(pulse)
+        pulse = XGate(np.pi / 2, **kwargs) if pulse is None else copy.copy(pulse)
         f_drive = self.f01_dressed + detuning
         pulse.drive_frequency = TWO_PI * f_drive
 
