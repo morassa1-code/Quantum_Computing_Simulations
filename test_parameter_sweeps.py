@@ -246,8 +246,7 @@ def fig_spectroscopy(run_dir, quick):
     ax.plot(rec['flux'], rec['f01_dressed'], 'g--', label='dressed f01')
     ax.axhline(BASE['f_res'], color='gray', ls=':', label='bare f_res')
     ax.set(xlabel='flux (Φ0)', ylabel='frequency (GHz)',
-           ylim=(BASE['f_res'] - 0.3, BASE['f_res'] + 0.3),  # zoom: the pulls are a few MHz
-           title='resonator spectroscopy vs flux (exact JC, zoom on f_res)')
+           title='resonator spectroscopy vs flux (exact JC)')
     ax.legend(fontsize=8)
     ax.grid(alpha=0.3)
     save_fig(fig, run_dir, '03_spectroscopy_vs_flux.png')
@@ -265,16 +264,16 @@ def plot_sweep(run_dir, param, rec, xlabel, xlog=False):
     ax[0].plot(x, rec['f01_dressed'], label='dressed f01 (JC)')
     ax[0].set(ylabel='f01 (GHz)', title='qubit frequency')
 
-    ax[1].plot(x, 1e3 * (rec['f01'] - rec['f01_koch']), label='bare: numerical - Koch theory')
-    ax[1].plot(x, 1e3 * (rec['f01_dressed'] - rec['f01_pert2']), label='dressed: JC - (f01 + g²/Δ)')
-    ax[1].plot(x, 1e3 * (rec['f01_dressed'] - rec['f01_jc_exact']), '--',
+    ax[1].plot(x, (rec['f01'] - rec['f01_koch']), label='bare: numerical - Koch theory')
+    ax[1].plot(x, (rec['f01_dressed'] - rec['f01_pert2']), label='dressed: JC - (f01 + g²/Δ)')
+    ax[1].plot(x, (rec['f01_dressed'] - rec['f01_jc_exact']), '--',
                label='dressed: JC - exact 2-level JC')
-    ax[1].set(ylabel='difference (MHz)', title='theory vs calculated f01')
+    ax[1].set(ylabel='difference (GHz)', title='theory vs calculated f01')
 
-    ax[2].plot(x, 1e3 * rec['chi_jc'], label='exact JC')
-    ax[2].plot(x, 1e3 * rec['chi_disp'], '--', label='dispersive H')
-    ax[2].plot(x, 1e3 * rec['chi_analytic'], ':', label='analytic χ0 - χ1/2')
-    ax[2].set(ylabel='χ (MHz)', title='dispersive shift')
+    ax[2].plot(x, rec['chi_jc'], label='exact JC')
+    ax[2].plot(x, rec['chi_disp'], '--', label='dispersive H')
+    ax[2].plot(x, rec['chi_analytic'], ':', label='analytic χ0 - χ1/2')
+    ax[2].set(ylabel='χ (GHz)', title='dispersive shift')
 
     for k in rec:
         if k.startswith('t1_') and k not in ('t1_purcell', 't1_expected'):
@@ -374,28 +373,26 @@ def fig_theory_vs_calc(run_dir, results, quick):
     ax.set(xlabel='EJ/EC', ylabel='f01 (GHz)', title='bare f01 (EC = 0.25 GHz, ng = 0)')
     ax.legend()
     ax.grid(alpha=0.3)
-    err = (num - koch) * 1e3
-    ax.twinx().plot(ratio, err, 'r:', label='error (MHz)')
-    axes[0].set_title('bare f01 vs EJ/EC; red dotted: numerical - theory (MHz, right axis)')
+    axes[0].set_title('bare f01 vs EJ/EC')
 
     # dressed f01 vs g
     g_rec = results['g']
     ax = axes[1]
-    ax.plot(g_rec['g'], 1e3 * (g_rec['f01_dressed'] - g_rec['f01']), 'k-', label='JC numerical')
-    ax.plot(g_rec['g'], 1e3 * (g_rec['f01_pert2'] - g_rec['f01']), '--', label='2nd order g²/Δ')
-    ax.plot(g_rec['g'], 1e3 * (g_rec['f01_jc_exact'] - g_rec['f01']), ':', lw=2, label='exact 2-level JC')
-    ax.set(xlabel='g (GHz)', ylabel='Lamb shift of f01 (MHz)', title='dressed f01 - bare f01 vs g')
+    ax.plot(g_rec['g'], (g_rec['f01_dressed'] - g_rec['f01']), 'k-', label='JC numerical')
+    ax.plot(g_rec['g'], (g_rec['f01_pert2'] - g_rec['f01']), '--', label='2nd order g²/Δ')
+    ax.plot(g_rec['g'], (g_rec['f01_jc_exact'] - g_rec['f01']), ':', lw=2, label='exact 2-level JC')
+    ax.set(xlabel='g (GHz)', ylabel='Lamb shift of f01 (GHz)', title='dressed f01 - bare f01 vs g')
     ax.legend()
     ax.grid(alpha=0.3)
 
     # dressed f01 vs resonator detuning
     f_rec = results['f_res']
     ax = axes[2]
-    ax.plot(f_rec['detuning'], 1e3 * (f_rec['f01_dressed'] - f_rec['f01']), 'k-', label='JC numerical')
-    ax.plot(f_rec['detuning'], 1e3 * (f_rec['f01_pert2'] - f_rec['f01']), '--', label='2nd order g²/Δ')
-    ax.plot(f_rec['detuning'], 1e3 * (f_rec['f01_jc_exact'] - f_rec['f01']), ':', lw=2,
+    ax.plot(f_rec['detuning'], (f_rec['f01_dressed'] - f_rec['f01']), 'k-', label='JC numerical')
+    ax.plot(f_rec['detuning'], (f_rec['f01_pert2'] - f_rec['f01']), '--', label='2nd order g²/Δ')
+    ax.plot(f_rec['detuning'], (f_rec['f01_jc_exact'] - f_rec['f01']), ':', lw=2,
             label='exact 2-level JC')
-    ax.set(xlabel='detuning Δ = f01 - f_res (GHz)', ylabel='Lamb shift of f01 (MHz)',
+    ax.set(xlabel='detuning Δ = f01 - f_res (GHz)', ylabel='Lamb shift of f01 (GHz)',
            title='dressed f01 - bare f01 vs detuning')
     ax.legend()
     ax.grid(alpha=0.3)
@@ -653,15 +650,15 @@ def fig_noise_eval(run_dir, quick):
 def write_summary(run_dir, results, ratio, koch_err, sim_lines, elapsed):
     L = [f'Parameter test, {datetime.datetime.now():%Y-%m-%d %H:%M}, {elapsed:.0f} s', '',
          'BASE: ' + ', '.join(f'{k}={v}' for k, v in BASE.items()), '',
-         'Theory vs calculated f01 (max |difference| over each sweep, MHz):',
+         'Theory vs calculated f01 (max |difference| over each sweep, GHz):',
          f'{"sweep":8s} {"bare-Koch":>10s} {"dressed-2nd order":>18s} {"dressed-exact JC":>17s}']
     for name, r in results.items():
-        d = lambda a, b: np.nanmax(np.abs(r[a] - r[b])) * 1e3
-        L.append(f'{name:8s} {d("f01", "f01_koch"):10.3f} {d("f01_dressed", "f01_pert2"):18.3f} '
-                 f'{d("f01_dressed", "f01_jc_exact"):17.4f}')
+        d = lambda a, b: np.nanmax(np.abs(r[a] - r[b]))
+        L.append(f'{name:8s} {d("f01", "f01_koch"):10.6f} {d("f01_dressed", "f01_pert2"):18.6f} '
+                 f'{d("f01_dressed", "f01_jc_exact"):17.6f}')
     L += ['', f'Bare f01 vs sqrt(8 EJ EC) - EC over EJ/EC = {ratio[0]:.0f}..{ratio[-1]:.0f} (d=0):',
-          f'  error {koch_err[0] * 1e3:.1f} MHz at EJ/EC={ratio[0]:.0f}, '
-          f'{koch_err[-1] * 1e3:.1f} MHz at EJ/EC={ratio[-1]:.0f} (numerical - theory)',
+          f'  error {koch_err[0]:.5f} GHz at EJ/EC={ratio[0]:.0f}, '
+          f'{koch_err[-1]:.5f} GHz at EJ/EC={ratio[-1]:.0f} (numerical - theory)',
           '', 'Notes:',
           '  - dressed vs exact JC should be ~0: |1,0> only couples to |0,1>, so the single-excitation',
           '    block of the multilevel model is exactly the 2-level JC (differences = state labelling',
