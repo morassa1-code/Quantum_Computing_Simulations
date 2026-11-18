@@ -9,6 +9,7 @@ if __name__ == '__main__':
     f_res = 5.0
     kappa = 0.001
     g = 0.1
+    detuning_factor = 0.02
 
     tmon = make_transmon(ej, ec)
     resonator = make_resonator(f_res=f_res)
@@ -17,7 +18,7 @@ if __name__ == '__main__':
     disp = readout['jc']
 
     t1_fit, t_t1, p_t1, fit_t1 = dyn.measure_t1(**rise_fall)
-    t2_fit, t_t2, p_t2, fit_t2, env_t2 = dyn.measure_t2(**rise_fall)
+    t2_fit, t_t2, p_t2, fit_t2, env_t2 = dyn.measure_t2(**rise_fall, detuning=dyn.f01 * detuning_factor)
 
     x_gate = XGate(np.pi, sigma=5.0, **rise_fall)
     t_pulse, traj = dyn.apply_gate(x_gate)
