@@ -21,13 +21,19 @@ import os
 os.environ.setdefault('MPLBACKEND', 'Agg')  # save figures only, no windows
 
 import argparse
+import sys
 import csv
 import datetime
+import math
 import time
 
 import numpy as np
 import matplotlib.pyplot as plt
+import scipy.constants as sc
 import scqubits as scq
+from scipy.optimize import least_squares
+from scqubits.core import units as scq_units
+from scqubits.core.noise import CONSTANTS, NOISE_PARAMS
 
 from transmon_resonator_times import (Transmon_Resonator_Dynamics, make_transmon,
                                       make_resonator, TWO_PI)
@@ -282,13 +288,13 @@ def plot_sweep(run_dir, param, rec, xlabel, xlog=False):
 def run_sweeps(run_dir, quick):
     s = (lambda full, small: small if quick else full)
     sweeps = [
-        ('flux', np.linspace(0, 0.5, s(26, 11)), 'flux (Φ0)', False),
+        ('flux', np.linspace(0, 2.5, s(36, 11)), 'flux (Φ0)', False),
         ('ej', np.linspace(20, 60, s(21, 9)), 'EJ (GHz)', False),
-        ('ec', np.linspace(0.15, 0.5, s(18, 8)), 'EC (GHz)', False),
-        ('ng', np.linspace(0, 0.5, s(11, 6)), 'offset charge ng', False),
-        ('g', np.linspace(0.02, 0.3, s(15, 8)), 'g (GHz)', False),
-        ('kappa', np.logspace(-4, -2, s(13, 7)), 'kappa (GHz)', True),
-        ('f_res', np.linspace(3, 6.5, s(15, 8)), 'f_res (GHz)', False),
+        ('ec', np.linspace(0.15, 1.5, s(18, 8)), 'EC (GHz)', False),
+        ('ng', np.linspace(0, 1, s(11, 6)), 'offset charge ng', False),
+        ('g', np.linspace(0.02, 1, s(15, 8)), 'g (GHz)', False),
+        ('kappa', np.logspace(-4, -1, s(13, 7)), 'kappa (GHz)', True),
+        ('f_res', np.linspace(3, 11, s(15, 8)), 'f_res (GHz)', False),
     ]
     results = {}
     for param, values, xlabel, xlog in sweeps:
@@ -406,6 +412,221 @@ def fig_simulated_t1(run_dir, quick):
     return lines
 
 
+# ------------------------------------------------ 08 noise channels vs theory (fits)
+#
+# For every scqubits noise channel the rate is computed numerically (scqubits, full
+# charge-basis diagonalisation) over sweeps of EJ, EC, flux, asymmetry d and offset charge,
+# and compared with the closed-form physical formula evaluated with the transmon
+# approximations (Koch et al. 2007):
+#     f01 = sqrt(8 EJ EC) - EC,  <0|n|1> = (EJ/8EC)^(1/4)/sqrt2,  <0|sin phi|1> = (2EC/EJ)^(1/4)
+# The formula's physical constant(s) (Q_cap, M, Z, A_flux, ...) are then fitted to the
+# scqubits numbers (log-space least squares over all sweeps of a channel at once) and
+# compared with the scqubits defaults. Rates are in 1/ns.
+
+LOG_FACTOR = np.sqrt(2 * abs(np.log(NOISE_PARAMS['omega_low'] * NOISE_PARAMS['t_exp'])))
+T_KELVIN = NOISE_PARAMS['T']
+
+
+def _eje(pt):
+    return pt['ej'] * np.sqrt(np.cos(np.pi * pt['flux']) ** 2 + pt['d'] ** 2 * np.sin(np.pi * pt['flux']) ** 2)
+
+
+def _f01(pt):
+    return np.sqrt(8 * _eje(pt) * pt['ec']) - pt['ec']
+
+
+def _coth(f_ghz):
+    """coth(h f / 2 k T): the sum of the absorption and emission spectral densities."""
+    return 1.0 / np.tanh(sc.h * f_ghz * 1e9 / (2 * sc.k * T_KELVIN))
+
+
+def _n01_sq(pt):
+    return np.sqrt(_eje(pt) / (8 * pt['ec'])) / 2
+
+
+def th_capacitive(pt, q0, power):
+    # Gamma = |<0|n|1>|^2 * 2*8 EC * 2pi / Q(f) * coth,  Q(f) = Q0 (6 GHz / f)^power
+    f = _f01(pt)
+    return _n01_sq(pt) * 32 * np.pi * pt['ec'] / (q0 * (6.0 / f) ** power) * _coth(f)
+
+
+def th_flux_bias_line(pt, m):
+    # Gamma = |<0|dH/dflux|1>|^2 * 2 (2pi)^2 M^2 omega hbar / Z * coth, with
+    # dH/dflux = -pi EJmax d / sqrt(cos^2 + d^2 sin^2) sin(phi) + (cos phi term, no 0-1 element)
+    f = _f01(pt)
+    c2 = np.cos(np.pi * pt['flux']) ** 2 + pt['d'] ** 2 * np.sin(np.pi * pt['flux']) ** 2
+    m01_sq = (np.pi * pt['ej'] * pt['d'] / np.sqrt(c2)) ** 2 * np.sqrt(2 * pt['ec'] / _eje(pt))
+    return (m01_sq * 2 * (2 * np.pi) ** 2 * m ** 2 * (2 * np.pi * f) * sc.hbar
+            / NOISE_PARAMS['R_0'] * _coth(f) * scq_units.to_standard_units(1) ** 2)
+
+
+def th_charge_impedance(pt, z):
+    # Gamma = |<0|n|1>|^2 * 2 omega / Q_c * coth,  Q_c = R_k / (8 pi Z)
+    f = _f01(pt)
+    q_c = CONSTANTS['R_k'] / (8 * np.pi * z)
+    return _n01_sq(pt) * 2 * (2 * np.pi * f) / q_c * _coth(f)
+
+
+def th_tphi_flux(pt, a_flux):
+    # Gamma = 2pi A sqrt(2 |ln(w_low t_exp)|) |d f01 / d flux|
+    c2 = np.cos(np.pi * pt['flux']) ** 2 + pt['d'] ** 2 * np.sin(np.pi * pt['flux']) ** 2
+    dej = np.pi * pt['ej'] * np.cos(np.pi * pt['flux']) * np.sin(np.pi * pt['flux']) * (pt['d'] ** 2 - 1) / np.sqrt(c2)
+    df01 = np.sqrt(2 * pt['ec'] / _eje(pt)) * dej  # d/dEJ [sqrt(8 EJ EC)] = sqrt(2 EC / EJ)
+    return 2 * np.pi * a_flux * LOG_FACTOR * np.abs(df01)
+
+
+def th_tphi_cc(pt, a_cc):
+    # Gamma = 2pi A sqrt(2 |ln|) |d f01 / d EJ|,  d f01 / d EJ = sqrt(2 EC / EJ)
+    return 2 * np.pi * a_cc * LOG_FACTOR * np.sqrt(2 * pt['ec'] / _eje(pt))
+
+
+def th_tphi_ng(pt, a_ng):
+    # Koch charge dispersion: E_m(ng) = E_m(1/4) - eps_m/2 cos(2 pi ng),
+    #   eps_m = (-1)^m EC 2^(4m+5)/m! sqrt(2/pi) (EJ/2EC)^(m/2+3/4) exp(-sqrt(8 EJ/EC))
+    # Gamma = 2pi A sqrt(2 |ln|) |d f01 / d ng| = 2pi A sqrt(2 |ln|) pi |eps_1 - eps_0| |sin(2 pi ng)|
+    eje, ec = _eje(pt), pt['ec']
+    eps = lambda m: ((-1) ** m * ec * 2 ** (4 * m + 5) / math.factorial(m) * np.sqrt(2 / np.pi)
+                     * (eje / (2 * ec)) ** (m / 2 + 0.75) * np.exp(-np.sqrt(8 * eje / ec)))
+    return 2 * np.pi * a_ng * LOG_FACTOR * np.pi * np.abs(eps(1) - eps(0)) * np.abs(np.sin(2 * np.pi * pt['ng']))
+
+
+_OP = dict(ej=30.0, ec=0.25, flux=0.2, d=0.1, ng=0.0)
+
+
+def _sweeps(quick, **ranges):
+    n = (lambda full: max(6, full // 2) if quick else full)
+    return {k: np.linspace(lo, hi, n(cnt)) for k, (lo, hi, cnt) in ranges.items()}
+
+
+def noise_channel_specs(quick):
+    common = dict(ej=(20, 60, 17), ec=(0.15, 0.5, 15), flux=(0.0, 0.45, 16), d=(0.02, 0.5, 14))
+    return {
+        't1_capacitive': dict(
+            theory=th_capacitive, params=dict(Q_cap0=1e6, power=0.7), op=_OP,
+            sweeps=_sweeps(quick, **common),
+            formula='Γ = |<0|n|1>|² · 16 EC · 2π / Q(f) · coth(hf/2kT),   Q(f) = Q0 (6 GHz / f)^power'),
+        't1_flux_bias_line': dict(
+            theory=th_flux_bias_line, params=dict(M=NOISE_PARAMS['M']), op=_OP,
+            sweeps=_sweeps(quick, **common),
+            formula='Γ = |<0|dH/dΦ|1>|² · 2 (2π)² M² ω ħ / Z · coth(hf/2kT);  '
+                    '<0|dH/dΦ|1> = π EJmax d / sqrt(cos² + d² sin²) · (2EC/EJ)^(1/4)'),
+        't1_charge_impedance': dict(
+            theory=th_charge_impedance, params=dict(Z=NOISE_PARAMS['R_0']), op=_OP,
+            sweeps=_sweeps(quick, **common),
+            formula='Γ = |<0|n|1>|² · 2 ω / Q_c · coth(hf/2kT),   Q_c = R_k / (8π Z)'),
+        'tphi_1_over_f_flux': dict(
+            theory=th_tphi_flux, params=dict(A_flux=NOISE_PARAMS['A_flux']), op=_OP,
+            sweeps=_sweeps(quick, ej=(20, 60, 17), ec=(0.15, 0.5, 15), flux=(0.02, 0.48, 16), d=(0.02, 0.5, 14)),
+            formula='Γφ = 2π A_flux sqrt(2|ln(ω_low t_exp)|) |∂f01/∂Φ|'),
+        'tphi_1_over_f_cc': dict(
+            theory=th_tphi_cc, params=dict(A_cc=NOISE_PARAMS['A_cc']), op=_OP,
+            sweeps=_sweeps(quick, ej=(20, 60, 17), ec=(0.15, 0.5, 15), flux=(0.0, 0.45, 16)),
+            formula='Γφ = 2π A_cc sqrt(2|ln(ω_low t_exp)|) |∂f01/∂EJ|,   ∂f01/∂EJ = sqrt(2 EC / EJ)'),
+        'tphi_1_over_f_ng': dict(
+            theory=th_tphi_ng, params=dict(A_ng=NOISE_PARAMS['A_ng']),
+            op=dict(ej=8.0, ec=0.25, flux=0.0, d=0.1, ng=0.25),  # low EJ/EC: measurable charge dispersion
+            sweeps=_sweeps(quick, ej=(5, 12, 15), ec=(0.2, 0.5, 13), flux=(0.0, 0.3, 10), ng=(0.02, 0.45, 15)),
+            formula='Γφ = 2π A_ng sqrt(2|ln(ω_low t_exp)|) π |ε1 - ε0| |sin 2π ng|,  '
+                    'ε_m = (-1)^m EC 2^(4m+5)/m! sqrt(2/π) (EJ/2EC)^(m/2+3/4) exp(-sqrt(8 EJ/EC))'),
+    }
+
+
+def _scqubits_rate(channel, pt, i):
+    t = make_transmon(pt['ej'][i], pt['ec'][i], ng=pt['ng'][i], ncut=BASE['ncut'],
+                      n_levels=BASE['n_levels'], flux=pt['flux'][i], d=pt['d'][i])
+    return getattr(t, channel)(get_rate=True)
+
+
+def fit_noise_channel(name, spec):
+    """Collect scqubits rates over the channel's sweeps and fit the formula's constants."""
+    data = {}  # sweep variable -> (pt arrays, rates)
+    for var, vals in spec['sweeps'].items():
+        pt = {k: np.full(len(vals), v) for k, v in spec['op'].items()}
+        pt[var] = np.asarray(vals, dtype=float)
+        rates = np.array([_scqubits_rate(name, pt, i) for i in range(len(vals))])
+        data[var] = (pt, rates)
+
+    all_pt = {k: np.concatenate([d[0][k] for d in data.values()]) for k in spec['op']}
+    all_rate = np.concatenate([d[1] for d in data.values()])
+    ok = np.isfinite(all_rate) & (all_rate > 1e-30)  # drop exact zeros (e.g. sweet spots)
+    names = list(spec['params'])
+    p0 = np.array([spec['params'][k] for k in names], dtype=float)
+
+    def model(pt, p):
+        return spec['theory'](pt, *p)
+
+    sel = lambda pt, m: {k: v[m] for k, v in pt.items()}
+    resid = lambda th: np.log10(model(sel(all_pt, ok), p0 * np.exp(th))) - np.log10(all_rate[ok])
+    # start away from the defaults (x0.5) so the fit has to find them
+    sol = least_squares(resid, np.full(len(p0), np.log(0.5)))
+    p_fit = p0 * np.exp(sol.x)
+    err_default = np.log10(model(sel(all_pt, ok), p0)) - np.log10(all_rate[ok])
+    err_fit = np.log10(model(sel(all_pt, ok), p_fit)) - np.log10(all_rate[ok])
+    ss_tot = np.sum((np.log10(all_rate[ok]) - np.log10(all_rate[ok]).mean()) ** 2)
+    return dict(name=name, names=names, default=p0, fit=p_fit, data=data, model=model,
+                rms_default=np.sqrt(np.mean(err_default ** 2)), rms_fit=np.sqrt(np.mean(err_fit ** 2)),
+                max_fit=np.max(np.abs(err_fit)), r2=1 - np.sum(err_fit ** 2) / ss_tot,
+                n_points=int(ok.sum()), n_dropped=int((~ok).sum()), all_rate=all_rate[ok],
+                all_model_fit=model(sel(all_pt, ok), p_fit))
+
+
+def fig_noise_eval(run_dir, quick):
+    specs = noise_channel_specs(quick)
+    fits, lines, rows = [], [], []
+    lines += ['Noise channel evaluation: software (scqubits) vs closed-form theory',
+              'rms = rms of log10(theory/scqubits): 0.02 ~ 5 %, 0.1 ~ 26 %;  fit started at 0.5 x default', '']
+    for name, spec in specs.items():
+        print(f'  fitting {name}...')
+        try:
+            r = fit_noise_channel(name, spec)
+        except Exception as e:
+            print(f'    {name} failed: {type(e).__name__}: {e}')
+            lines.append(f'{name}: FAILED ({type(e).__name__}: {e})')
+            continue
+        fits.append(r)
+        n_sw = len(spec['sweeps'])
+        n_rows = (n_sw + 1) // 2
+        label = 'T1' if name.startswith('t1') else 'Tφ'
+        fig = plt.figure(figsize=(13, 5.2 * n_rows))
+        gs = fig.add_gridspec(2 * n_rows, 2, height_ratios=[3, 1] * n_rows, hspace=0.45)
+        for n_i, (var, (pt, rates)) in enumerate(r['data'].items()):
+            row, col = divmod(n_i, 2)
+            ax = fig.add_subplot(gs[2 * row, col])
+            ax_res = fig.add_subplot(gs[2 * row + 1, col], sharex=ax)
+            x = pt[var]
+            t_scq = 1 / np.where(rates > 0, rates, np.nan) / 1e3
+            t_fit = 1 / r['model'](pt, r['fit']) / 1e3
+            ax.plot(x, t_scq, 'ko', ms=5, label='software evaluation (scqubits)')
+            ax.plot(x, 1 / r['model'](pt, r['default']) / 1e3, 'b--', label='theory, default constants')
+            ax.plot(x, t_fit, 'r-', label='theory, constants matched to software')
+            ax.set(ylabel=f'{label} (µs)', yscale='log', title=f'{label} vs {var}')
+            ax.grid(alpha=0.3, which='both')
+            ax.legend(fontsize=7)
+            ax_res.plot(x, 100 * (t_fit / t_scq - 1), 'r.-')
+            ax_res.axhline(0, color='k', lw=0.6)
+            ax_res.set(xlabel=var, ylabel='evaluation error (%)')
+            ax_res.grid(alpha=0.3)
+        fit_txt = ', '.join(f'{k} = {v:.4g} (default {d:.4g})'
+                            for k, v, d in zip(r['names'], r['fit'], r['default']))
+        fig.suptitle('\n'.join([name, spec['formula'], f'constants matched to software: {fit_txt};  R² = {r["r2"]:.4f}']),
+                     fontsize=9, y=0.995)
+        save_fig(fig, run_dir, f'08_noise_eval_{name}.png')
+        lines += [f'{name}', f'  formula: {spec["formula"]}']
+        for k, v, d in zip(r['names'], r['fit'], r['default']):
+            lines.append(f'  {k}: implied by software {v:.4g}, scqubits default {d:.4g}, ratio {v / d:.3f}')
+            rows.append([name, k, d, v, v / d, r['rms_default'], r['rms_fit'], r['r2']])
+        lines.append(f'  log10 error rms: {r["rms_default"]:.3f} with defaults -> {r["rms_fit"]:.3f} with matched constants '
+                     f'(max {r["max_fit"]:.3f}), R² = {r["r2"]:.5f}, {r["n_points"]} points'
+                     + (f', {r["n_dropped"]} zero-rate points dropped' if r['n_dropped'] else ''))
+
+    with open(os.path.join(run_dir, 'noise_eval.csv'), 'w', newline='') as f:
+        w = csv.writer(f)
+        w.writerow(['channel', 'constant', 'scqubits_default', 'matched_to_software', 'ratio', 'rms_log10_default',
+                    'rms_log10_fit', 'R2'])
+        w.writerows([[row[0], row[1]] + [f'{v:.6g}' for v in row[2:]] for row in rows])
+    return lines
+
+
 # ---------------------------------------------------------------------- summary
 
 def write_summary(run_dir, results, ratio, koch_err, sim_lines, elapsed):
@@ -428,6 +649,8 @@ def write_summary(run_dir, results, ratio, koch_err, sim_lines, elapsed):
           '  - bare vs Koch: the formula drops the next term in sqrt(EC/EJ); error grows at small EJ/EC.',
           '  - kappa has no effect on f01 (only on Purcell T1); the kappa sweep shows this.',
           '  - at flux = 0 (sweet spot) the flux-noise dephasing is infinite and is drawn as a gap.']
+    # if eval_lines:
+    #     L += [''] + eval_lines
     if sim_lines:
         L += ['', 'Simulated T1 (master equation) vs expected:'] + ['  ' + s for s in sim_lines]
     path = os.path.join(run_dir, 'summary.txt')
@@ -442,6 +665,7 @@ def main():
     ap.add_argument('--quick', action='store_true', help='coarser grids')
     ap.add_argument('--simulate', action='store_true', help='also run master-equation T1 fits')
     args = ap.parse_args()
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')  # Greek letters on a cp1252 console
 
     t0 = time.time()
     run_dir = make_run_dir()
