@@ -1,5 +1,6 @@
 from scqubits_tools import *
 
+rise_fall = {'t_rise': 10.0, 't_fall': 10.0}
 
 if __name__ == '__main__':
     # GHz
@@ -15,10 +16,10 @@ if __name__ == '__main__':
     readout = dyn.readout_summary()
     disp = readout['jc']
 
-    t1_fit, t_t1, p_t1, fit_t1 = dyn.measure_t1()
-    t2_fit, t_t2, p_t2, fit_t2, env_t2 = dyn.measure_t2()
+    t1_fit, t_t1, p_t1, fit_t1 = dyn.measure_t1(**rise_fall)
+    t2_fit, t_t2, p_t2, fit_t2, env_t2 = dyn.measure_t2(**rise_fall)
 
-    x_gate = XGate(np.pi, sigma=5.0)
+    x_gate = XGate(np.pi, sigma=5.0, **rise_fall)
     t_pulse, traj = dyn.apply_gate(x_gate)
     pops = dyn.populations(traj)
     x_gate.frequency_spectrum(omega_q=dyn.f01*TWO_PI, save_as='x_pi_frequency_spectrum')

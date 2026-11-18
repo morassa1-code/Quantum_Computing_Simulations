@@ -188,7 +188,7 @@ class Transmon_Resonator_Dynamics(TransmonQubit):
         return d.reshape(len(d), self.n_levels, self.n_res)
 
     def populations(self, psi_traj):
-        """Transmon level populations, resonator traced out (shape (n_steps, n_levels))."""
+        """Transmon level populations, resonator traced out (shape (n_steps, n_q))."""
         return self._diagonals(psi_traj).sum(axis=2)
 
     def resonator_populations(self, psi_traj):
@@ -416,14 +416,14 @@ class Transmon_Resonator_Dynamics(TransmonQubit):
             vec = step @ vec
         return states
 
-    def measure_t1(self, pulse=None, t_max=None, n_points=60):
+    def measure_t1(self, pulse=None, t_max=None, n_points=60, **kwargs):
         """
         Excite |0, 0 photons> with `pulse` (default XGate(pi)), decay freely
         and fit the transmon P1 = a exp(-t/T1). Includes the Purcell decay
         through the resonator, so compare with t1_expected. `t_max` in ns.
         Returns (t1_fit [ns], t [ns], p1, fit curve on t).
         """
-        pulse = XGate(np.pi, sigma=2.0) if pulse is None else pulse
+        pulse = XGate(np.pi, sigma=2.0, **kwargs) if pulse is None else pulse
         _, traj = self.apply_gate(pulse, psi0=qt.ket2dm(self.ground_state))
         t = np.linspace(0, t_max or 3 * self.t1_expected, n_points)
         states = self.free_evolution(qt.Qobj(traj[-1], dims=self.H0.dims), t)
@@ -432,7 +432,7 @@ class Transmon_Resonator_Dynamics(TransmonQubit):
         popt, _ = curve_fit(model, t, p1, p0=[self.t1_expected, p1[0]])
         return popt[0], t, p1, model(t, *popt)
 
-    def measure_t2(self, pulse=None, t_max=None, detuning=None, n_points=500):
+    def measure_t2(self, pulse=None, t_max=None, detuning=None, n_points=500, **kwargs):
         """
         Ramsey: pulse - wait t - pulse, with `pulse` (default XGate(pi/2))
         driven `detuning` GHz above f01_dressed (default: 20 fringes over the
