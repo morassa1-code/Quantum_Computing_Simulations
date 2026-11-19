@@ -670,7 +670,7 @@ def fig_noise_eval(run_dir, quick):
 
 # ---------------------------------------------------------------------- summary
 
-def write_summary(run_dir, results, ratio, koch_err, sim_lines, elapsed):
+def write_summary(run_dir, results, ratio, koch_err, sim_lines, eval_lines, elapsed):
     L = [f'Parameter test, {datetime.datetime.now():%Y-%m-%d %H:%M}, {elapsed:.0f} s', '',
          'BASE: ' + ', '.join(f'{k}={v}' for k, v in BASE.items()), '',
          'Theory vs calculated f01 (max |difference| over each sweep, GHz):',
@@ -690,8 +690,8 @@ def write_summary(run_dir, results, ratio, koch_err, sim_lines, elapsed):
           '  - bare vs Koch: the formula drops the next term in sqrt(EC/EJ); error grows at small EJ/EC.',
           '  - kappa has no effect on f01 (only on Purcell T1); the kappa sweep shows this.',
           '  - at flux = 0 (sweet spot) the flux-noise dephasing is infinite and is drawn as a gap.']
-    # if eval_lines:
-    #     L += [''] + eval_lines
+    if eval_lines:
+        L += [''] + eval_lines
     if sim_lines:
         L += ['', 'Simulated T1 (master equation) vs expected:'] + ['  ' + s for s in sim_lines]
     path = os.path.join(run_dir, 'summary.txt')
@@ -718,7 +718,8 @@ def main():
     fig_map(run_dir, args.quick)
     ratio, koch_err = fig_theory_vs_calc(run_dir, results, args.quick)
     sim_lines = fig_simulated_t1(run_dir, args.quick) if args.simulate else []
-    write_summary(run_dir, results, ratio, koch_err, sim_lines, time.time() - t0)
+    eval_lines = fig_noise_eval(run_dir, args.quick)
+    write_summary(run_dir, results, ratio, koch_err, sim_lines, eval_lines, time.time() - t0)
 
 
 if __name__ == '__main__':
