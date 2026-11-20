@@ -119,7 +119,10 @@ class Transmon_Resonator_Dynamics(TransmonQubit):
             kappa=None: no resonator decay.
         noise_channels : scqubits noise-channel names to include (default: all
             the transmon supports, see tmon.supported_noise_channels()).
+        q_cap : fixed dielectric quality factor for t1_capacitive. None keeps the
+            scqubits default, 1e6 (6 GHz / f01)^0.7 (Smith et al. 2020).
         """
+        self.q_cap = q_cap
         n = tmon.truncated_dim
         e = tmon.eigenvals(n)
         self.tmon = tmon
@@ -227,7 +230,7 @@ class Transmon_Resonator_Dynamics(TransmonQubit):
         lines = ['T1 noise channels (1/T1 = sum of the included rates):']
         for c in (c for c in self.tmon.supported_noise_channels() if c.startswith('t1')):
             status = 'included' if c in self.noise_channels else 'excluded'
-            lines.append(f'  {c}: T1 = {getattr(self.tmon, c)() / 1e3:.4g} us ({status})')
+            lines.append(f'  {c}: T1 = {getattr(self.tmon, c)(**self._noise_options(c)) / 1e3:.4g} us ({status})')
             lines.append(f'      {T1_CHANNEL_INFO.get(c, "no description")}')
         for c in (c for c in self.tmon.supported_noise_channels() if c.startswith('tphi')):
             status = 'included' if c in self.noise_channels else 'excluded'
@@ -421,7 +424,7 @@ class Transmon_Resonator_Dynamics(TransmonQubit):
         popt, _ = curve_fit(model, t, p1, p0=[self.t1_expected, p1[0]])
         return popt[0], t, p1, model(t, *popt)
 
-    def measure_t2(self, pulse=None, t_max=None, detuning=None, n_points=500, **kwargs):
+    def measure_t2(self, pulse=None, t_max=None, detuning=None, n_points=1000, **kwargs):
         """
         Ramsey: pulse - wait t - pulse, with `pulse` (default XGate(pi/2))
         driven `detuning` GHz above f01_dressed (default: 20 fringes over the
