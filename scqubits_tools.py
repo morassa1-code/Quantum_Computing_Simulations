@@ -457,6 +457,8 @@ class Transmon_Resonator_Dynamics(TransmonQubit):
 
         R = (1j * TWO_PI * f_drive * t_pulse[-1] * self.n_total).expm()
         rho1 = R * apply_s(qt.ket2dm(self.ground_state)) * R.dag()
+        # Nyquist needs > 2 samples per fringe; 4 keeps the fit and the drawn curve faithful
+        n_points = max(n_points, int(4 * detuning * t_max))
         t = np.linspace(0, t_max, n_points)
         states = self.free_evolution(rho1, t, f_frame=f_drive)
         p1 = self.populations([apply_s(s).full() for s in states])[:, 1]
@@ -469,6 +471,10 @@ class Transmon_Resonator_Dynamics(TransmonQubit):
         fit = lambda x, tau, a, b, phi, f: b + a * np.exp(-x / tau) * np.cos(TWO_PI * f * x + phi)
         popt, _ = curve_fit(fit, t, p1, p0=[t_max / 3, np.hypot(c, s), p1.mean(), np.arctan2(s, c), f0])
         tau, a, b = popt[:3]
+        # kept for inspection: the FFT the fit starts from, next to the drive
+        freqs = np.fft.rfftfreq(8 * len(t), t[1] - t[0])
+        self.ramsey_fft = {'freqs': freqs, 'spectrum': spec / spec.max(), 'f_peak': f0, 'f_fit': abs(popt[4]),
+                           'detuning': detuning, 'f_drive': f_drive, 'f01_dressed': self.f01_dressed}
         decay = abs(a) * np.exp(-t / tau)
         return abs(tau), t, p1, fit(t, *popt), (b - decay, b + decay)
 
