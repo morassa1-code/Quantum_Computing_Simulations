@@ -36,6 +36,7 @@ from scipy.optimize import least_squares
 from scqubits.core import units as scq_units
 from scqubits.core.noise import CONSTANTS, NOISE_PARAMS
 
+from simulation_tools import make_run_dir
 from transmon_resonator_times import (Transmon_Resonator_Dynamics, make_transmon,
                                       make_resonator, TWO_PI)
 
@@ -66,13 +67,6 @@ OUT_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'test_result
 
 
 # ---------------------------------------------------------------------- helpers
-
-def make_run_dir():
-    stamp = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M')
-    path = os.path.join(OUT_ROOT, stamp)
-    os.makedirs(path, exist_ok=True)
-    return path
-
 
 def build(**kw):
     p = {**BASE, **kw}
@@ -603,10 +597,9 @@ def fit_noise_channel(name, spec):
     p_fit = p0 * np.exp(sol.x)
     err_default = np.log10(model(sel(all_pt, ok), p0)) - np.log10(all_rate[ok])
     err_fit = np.log10(model(sel(all_pt, ok), p_fit)) - np.log10(all_rate[ok])
-    ss_tot = np.sum((np.log10(all_rate[ok]) - np.log10(all_rate[ok]).mean()) ** 2)
     return dict(name=name, names=names, default=p0, fit=p_fit, data=data, model=model,
                 rms_default=np.sqrt(np.mean(err_default ** 2)), rms_fit=np.sqrt(np.mean(err_fit ** 2)),
-                max_fit=np.max(np.abs(err_fit)), r2=1 - np.sum(err_fit ** 2) / ss_tot,
+                max_fit=np.max(np.abs(err_fit)),
                 n_points=int(ok.sum()), n_dropped=int((~ok).sum()), all_rate=all_rate[ok],
                 all_model_fit=model(sel(all_pt, ok), p_fit))
 
@@ -649,21 +642,21 @@ def fig_noise_eval(run_dir, quick):
             ax_res.grid(alpha=0.3)
         fit_txt = ', '.join(f'{k} = {v:.4g} (default {d:.4g})'
                             for k, v, d in zip(r['names'], r['fit'], r['default']))
-        fig.suptitle('\n'.join([name, spec['formula'], f'constants matched to software: {fit_txt};  R² = {r["r2"]:.4f}']),
+        fig.suptitle('\n'.join([name, spec['formula'], f'constants matched to software: {fit_txt}']),
                      fontsize=9, y=0.995)
         save_fig(fig, run_dir, f'08_noise_eval_{name}.png')
         lines += [f'{name}', f'  formula: {spec["formula"]}']
         for k, v, d in zip(r['names'], r['fit'], r['default']):
             lines.append(f'  {k}: implied by software {v:.4g}, documented default {d:.4g}, ratio {v / d:.3f}')
-            rows.append([name, k, d, v, v / d, r['rms_default'], r['rms_fit'], r['r2']])
+            rows.append([name, k, d, v, v / d, r['rms_default'], r['rms_fit']])
         lines.append(f'  log10 error rms: {r["rms_default"]:.3f} with defaults -> {r["rms_fit"]:.3f} with matched constants '
-                     f'(max {r["max_fit"]:.3f}), R² = {r["r2"]:.5f}, {r["n_points"]} points'
+                     f'(max {r["max_fit"]:.3f}), {r["n_points"]} points'
                      + (f', {r["n_dropped"]} zero-rate points dropped' if r['n_dropped'] else ''))
 
     with open(os.path.join(run_dir, 'noise_eval.csv'), 'w', newline='') as f:
         w = csv.writer(f)
         w.writerow(['channel', 'constant', 'documented_default', 'matched_to_software', 'ratio', 'rms_log10_default',
-                    'rms_log10_fit', 'R2'])
+                    'rms_log10_fit'])
         w.writerows([[row[0], row[1]] + [f'{v:.6g}' for v in row[2:]] for row in rows])
     return lines
 
@@ -709,7 +702,7 @@ def main():
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')  # Greek letters on a cp1252 console
 
     t0 = time.time()
-    run_dir = make_run_dir()
+    run_dir = make_run_dir(OUT_ROOT)
     print('results ->', run_dir)
     fig_transmon_levels(run_dir, args.quick)
     fig_resonator_levels(run_dir, args.quick)
