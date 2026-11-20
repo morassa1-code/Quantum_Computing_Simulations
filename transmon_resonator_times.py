@@ -9,7 +9,7 @@ if __name__ == '__main__':
     f_res = 5.0
     kappa = 0.001
     g = 0.1
-    detuning_factor = 0.0
+    detuning_factor = 0.00002
     flux = 1.0
 
     tmon = make_transmon(ej, ec, flux=flux)
@@ -41,6 +41,20 @@ if __name__ == '__main__':
     axes[2].plot(t_t2 / 1e3, env_t2[1], 'r-')
     axes[2].set(xlabel='t (us)', ylabel='P(|1>)', title='Ramsey')
     axes[2].legend()
+    fft = dyn.ramsey_fft
+    f_mhz = fft['freqs'] * 1e3  # GHz -> MHz
+    axes[3].plot(f_mhz, fft['spectrum'], label='FFT of Ramsey P(|1>)')
+    axes[3].plot([], [], ' ', label=f'f01 dressed = {fft["f01_dressed"]:.6f} GHz')
+    axes[3].plot([], [], ' ', label=f'drive frequency = {fft["f_drive"]:.6f} GHz')
+    axes[3].axvline(fft['detuning'] * 1e3, color='g', ls=':', lw=2,
+                    label=f'detuning (drive - f01 dressed) = {fft["detuning"] * 1e3:.4f} MHz')
+    axes[3].axvline(fft['f_peak'] * 1e3, color='orange', ls='--',
+                    label=f'FFT peak = {fft["f_peak"] * 1e3:.4f} MHz')
+    axes[3].axvline(fft['f_fit'] * 1e3, color='r', ls='-', lw=0.8,
+                    label=f'fitted = {fft["f_fit"] * 1e3:.4f} MHz')
+    axes[3].set(xlim=(0, 5 * fft['detuning'] * 1e3), xlabel='fringe frequency (MHz)',
+                ylabel='normalized |FFT|', title='Ramsey spectrum (frame of the drive)')
+    axes[3].legend(fontsize=7)
     plt.tight_layout()
     fig_path = save_output('scq_dynamics')
 
@@ -54,6 +68,13 @@ if __name__ == '__main__':
         f'  with Purcell decay (expected): T1 = {dyn.t1_expected / 1e3:.2f} us, '
         f'T2 = {dyn.t2_expected / 1e3:.2f} us',
         f'  simulated fits (transmon + resonator): T1 = {t1_fit / 1e3:.2f} us, T2 = {t2_fit / 1e3:.2f} us',
+        '',
+        'Ramsey fringe frequency (the qubit seen from the frame rotating at the drive):',
+        f'  drive = {fft["f_drive"]:.6f} GHz, dressed f01 = {fft["f01_dressed"]:.6f} GHz, '
+        f'set detuning = {fft["detuning"] * 1e3:.4f} MHz',
+        f'  FFT peak = {fft["f_peak"] * 1e3:.4f} MHz, fitted = {fft["f_fit"] * 1e3:.4f} MHz '
+        f'(fitted - set = {(fft["f_fit"] - fft["detuning"]) * 1e6:.2f} kHz)',
+        f'  => qubit frequency seen by the Ramsey = drive - fitted = {fft["f_drive"] - fft["f_fit"]:.6f} GHz',
         '',
         *dyn.noise_channel_report(),
         '',
