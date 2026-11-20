@@ -145,7 +145,7 @@ class Transmon_Resonator_Dynamics(TransmonQubit):
         self.transmon_H0 = self.tmon.hamiltonian()
         # self.resonator_H0 = self.resonator.hamiltonian() no such command - do something else
         # charge operator <i|n|j> in the transmon eigenbasis (n x n numpy array)
-        self.n_mat = tmon.matrixelement_table('n_operator', evals_count=n)
+        self.tmon_n_mat = tmon.matrixelement_table('n_operator', evals_count=n)
         self.tr_detuning = self.f01 - self.f_res
         _, _, chi_j = self.ladder_couplings()
         self.f_res_0 = self.f_res - chi_j[0]
@@ -155,7 +155,8 @@ class Transmon_Resonator_Dynamics(TransmonQubit):
         id_q, id_r = qt.qeye(n), qt.qeye(self.n_res)
         a = qt.Qobj(resonator.annihilation_operator())
         self._H0 = TWO_PI * self.readout_hamiltonian()
-        self._drive_op = qt.tensor(qt.Qobj(self.n_mat / abs(self.n_mat[0, 1])), id_r)
+        # self._drive_op = qt.tensor(qt.Qobj(self.tmon_n_mat / abs(self.tmon_n_mat[0, 1])), id_r)
+        self._drive_op = qt.tensor(qt.Qobj(self.tmon_n_mat), id_r)
         self.c_ops = [qt.tensor(c, id_r) for c in c_ops]
         if kappa:
             self.c_ops.append(np.sqrt(TWO_PI * kappa) * qt.tensor(id_q, a))
@@ -256,10 +257,11 @@ class Transmon_Resonator_Dynamics(TransmonQubit):
             chi_j   = g_j^2 / detuning_j                partial dispersive shift
         All in GHz. For a transmon g_j ~ sqrt(j+1) g, like a harmonic oscillator.
         """
-        n_mat = self.n_mat
+        n_mat = self.tmon_n_mat
         e = self.tmon.eigenvals(self.n_levels)
         j = np.arange(self.n_levels - 1)
-        g_j = self.g * np.abs(n_mat[j, j + 1]) / abs(n_mat[0, 1])
+        # g_j = self.g * np.abs(n_mat[j, j + 1]) / abs(n_mat[0, 1])
+        g_j = self.g * np.abs(n_mat[j, j + 1])
         detuning_j = np.diff(e) - self.f_res
         chi_j = g_j ** 2 / detuning_j
         return g_j, detuning_j, chi_j
@@ -311,24 +313,6 @@ class Transmon_Resonator_Dynamics(TransmonQubit):
         for j, gj in enumerate(g_j):
             H += gj * (qt.tensor(proj(j, j + 1), a.dag()) + qt.tensor(proj(j + 1, j), a))
         return H
-
-    # def transmon_readout_hamiltonian(self):
-    #     """
-    #     Transmon ⊗ resonator Hamiltonian (qutip, GHz, hbar = 1) keeping all
-    #     `n_levels` transmon levels, to compare with the two-level models:
-    #         H = sum_j (E_j - E_0) |j><j| + f_r a†a + g (n / |<0|n|1>|) (a + a†)
-    #     n is the charge operator in the transmon eigenbasis. Dividing by
-    #     |<0|n|1>| makes g the coupling of the 0<->1 transition, the same g as in
-    #     the Jaynes-Cummings model; the higher transitions then couple with
-    #     their true relative matrix elements (<1|n|2> ~ sqrt(2) <0|n|1>) and the
-    #     counter-rotating terms are kept.
-    #     """
-    #     n_q = self.n_levels
-    #     n_op = qt.Qobj(self.n_mat / abs(self.n_mat[0, 1]))
-    #     a = qt.destroy(self.n_res)
-    #     return (qt.tensor(self.H0 / TWO_PI, qt.qeye(self.n_res))
-    #             + qt.tensor(qt.qeye(n_q), self.f_res * a.dag() * a)
-    #             + self.g * qt.tensor(n_op, a + a.dag()))
 
     @staticmethod
     def dressed_frequencies(H):
