@@ -110,7 +110,7 @@ class Transmon_Resonator_Dynamics(TransmonQubit):
 
     # ------------------------------------------------------------------ setup
 
-    def __init__(self, tmon, resonator, g, kappa=None, noise_channels=None):
+    def __init__(self, tmon, resonator, g, kappa=None, noise_channels=None, q_cap=None):
         """
         tmon : scqubits.TunableTransmon (truncated_dim = number of transmon levels).
         resonator : scqubits.Oscillator (E_osc = f_res in GHz, truncated_dim =
@@ -204,6 +204,10 @@ class Transmon_Resonator_Dynamics(TransmonQubit):
             return [c for c in supported if c != 't1_charge_impedance']
         return [c for c in noise_channels if c in supported]
 
+    def _noise_options(self, channel):
+        """Keyword arguments for a scqubits noise channel (only Q_cap for t1_capacitive)."""
+        return {'Q_cap': self.q_cap} if channel == 't1_capacitive' and self.q_cap else {}
+
     def coherence_times(self):
         """
         (T1, T_phi, T2) in ns of the 0<->1 transition from the scqubits noise
@@ -212,6 +216,7 @@ class Transmon_Resonator_Dynamics(TransmonQubit):
         """
         t1_channels = [c for c in self.noise_channels if c.startswith('t1')]
         tphi_channels = [c for c in self.noise_channels if c.startswith('tphi')]
+        t1_channels = [(c, self._noise_options(c)) if self._noise_options(c) else c for c in t1_channels]
         t1 = self.tmon.t1_effective(noise_channels=t1_channels) if t1_channels else np.inf
         rate_phi = sum(1.0 / getattr(self.tmon, c)() for c in tphi_channels)
         t_phi = 1.0 / rate_phi if rate_phi else np.inf
