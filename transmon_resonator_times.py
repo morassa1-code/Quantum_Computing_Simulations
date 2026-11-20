@@ -12,9 +12,9 @@ if __name__ == '__main__':
     detuning_factor = 0.0
     flux = 1.0
 
-    tmon = make_transmon(ej, ec)
+    tmon = make_transmon(ej, ec, flux=flux)
     resonator = make_resonator(f_res=f_res)
-    dyn = Transmon_Resonator_Dynamics(tmon, resonator=resonator, g=g, kappa=kappa, flux=flux)
+    dyn = Transmon_Resonator_Dynamics(tmon, resonator=resonator, g=g, kappa=kappa, q_cap=5e6)
     readout = dyn.readout_summary()
     disp = readout['jc']
 
@@ -27,7 +27,7 @@ if __name__ == '__main__':
     # x_gate.frequency_spectrum(omega_q=dyn.f01*TWO_PI, save_as='x_pi_frequency_spectrum')
     # x_gate.plot_bloch_trajectory()
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    fig, axes = plt.subplots(1, 4, figsize=(20, 4))
     axes[0].plot(t_pulse, pops[:, :3])
     axes[0].set(xlabel='t (ns)', ylabel='population', title='pi pulse')
     axes[0].legend(['|0>', '|1>', '|2>'])
