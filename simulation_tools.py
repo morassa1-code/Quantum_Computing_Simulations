@@ -1,4 +1,5 @@
 import os
+import datetime
 from matplotlib import lines
 from matplotlib.axis import Axis
 from matplotlib.figure import Figure
@@ -10,22 +11,39 @@ import trimesh
 from trimesh.visual.material import PBRMaterial
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
+_RUN_DIR = None
+
+
+def make_run_dir(root=DATA_DIR):
+    """Create and return a new folder root/<YYYY-MM-DD_HH-MM-SS>."""
+    path = os.path.join(root, datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S'))
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def get_output_dir():
+    """
+    Folder every save in this run goes to: DATA_DIR/<date_time>, created on the
+    first call and reused for the rest of the process, so one run = one folder.
+    """
+    global _RUN_DIR
+    if _RUN_DIR is None:
+        _RUN_DIR = make_run_dir()
+    return _RUN_DIR
 
 
 def save_and_show(save_as=None, dpi=200):
-    """Save the current figure to DATA_DIR/save_as (.png if no extension), then show it."""
+    """Save the current figure to the run folder (.png if no extension), then show it."""
     if save_as:
-        os.makedirs(DATA_DIR, exist_ok=True)
         name = save_as if os.path.splitext(save_as)[1] else save_as + '.png'
-        plt.savefig(os.path.join(DATA_DIR, name), dpi=dpi, bbox_inches='tight')
+        plt.savefig(os.path.join(get_output_dir(), name), dpi=dpi, bbox_inches='tight')
     plt.show()
 
 
 def save_text(text, name):
-    """Save text to DATA_DIR/name (.txt if no extension) and return the path."""
-    os.makedirs(DATA_DIR, exist_ok=True)
+    """Save text to the run folder (.txt if no extension) and return the path."""
     name = name if os.path.splitext(name)[1] else name + '.txt'
-    path = os.path.join(DATA_DIR, name)
+    path = os.path.join(get_output_dir(), name)
     with open(path, 'w', encoding='utf-8') as f:
         f.write(text)
     return path
@@ -40,7 +58,6 @@ def export_bloch_glb(x, y, z, name, max_points=400, tube_radius=0.015):
     the axes (|0>, |1>, |+>, ...) with text boxes on the slide.
     """
 
-    os.makedirs(DATA_DIR, exist_ok=True)
     name = name if os.path.splitext(name)[1] else name + '.glb'
 
     # glTF is Y-up: map Bloch (x, y, z) -> (x, z, -y) so that |0> points up
@@ -83,7 +100,7 @@ def export_bloch_glb(x, y, z, name, max_points=400, tube_radius=0.015):
         marker.apply_translation(point)
         scene.add_geometry(solid(marker, rgba), geom_name=label)
 
-    path = os.path.join(DATA_DIR, name)
+    path = os.path.join(get_output_dir(), name)
     scene.export(path)
     return path
 
@@ -92,14 +109,13 @@ def save_bloch_gif(fig, bloch, name, n_frames=72, elev=25, fps=24):
     """Save a GIF of the rendered qutip Bloch sphere turning once about Z, in DATA_DIR."""
     from PIL import Image
 
-    os.makedirs(DATA_DIR, exist_ok=True)
     name = name if os.path.splitext(name)[1] else name + '.gif'
     frames = []
     for azim in np.linspace(0, 360, n_frames, endpoint=False):
         bloch.axes.view_init(elev=elev, azim=azim)
         fig.canvas.draw()
         frames.append(Image.fromarray(np.asarray(fig.canvas.buffer_rgba())).convert('RGB'))
-    path = os.path.join(DATA_DIR, name)
+    path = os.path.join(get_output_dir(), name)
     frames[0].save(path, save_all=True, append_images=frames[1:],
                    duration=int(1000 / fps), loop=0)
     return path
@@ -592,7 +608,7 @@ class TransmonQubit:
         RabiDrive, the fit is compared with the theory A = Omega^2/(Omega^2 +
         Delta^2), w = sqrt(Omega^2 + Delta^2). Returns a dict (max_pop,
         omega_eff, fit, and the theory values). The comparison is saved to
-        DATA_DIR/save_as (.txt if no extension), or printed if save_as is None.
+        the run folder as save_as (.txt if no extension), or printed if save_as is None.
         """
         tau = np.asarray(t_vals) - t_vals[0]
         pop = self.populations(psi_traj)[:, level]

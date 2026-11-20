@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from scipy.linalg import expm
 from scipy.optimize import curve_fit
 
-from simulation_tools import TransmonQubit, XGate
+from simulation_tools import TransmonQubit, XGate, get_output_dir
 
 scq.settings.PROGRESSBAR_DISABLED = False
 scq.settings.T1_DEFAULT_WARNING = False
@@ -155,8 +155,8 @@ class Transmon_Resonator_Dynamics(TransmonQubit):
         id_q, id_r = qt.qeye(n), qt.qeye(self.n_res)
         a = qt.Qobj(resonator.annihilation_operator())
         self._H0 = TWO_PI * self.readout_hamiltonian()
-        # self._drive_op = qt.tensor(qt.Qobj(self.tmon_n_mat / abs(self.tmon_n_mat[0, 1])), id_r)
-        self._drive_op = qt.tensor(qt.Qobj(self.tmon_n_mat), id_r)
+        # normalized so <0|drive_op|1> = 1: a pulse's area is then its rotation angle
+        self._drive_op = qt.tensor(qt.Qobj(self.tmon_n_mat / abs(self.tmon_n_mat[0, 1])), id_r)
         self.c_ops = [qt.tensor(c, id_r) for c in c_ops]
         if kappa:
             self.c_ops.append(np.sqrt(TWO_PI * kappa) * qt.tensor(id_q, a))
@@ -455,20 +455,25 @@ class Transmon_Resonator_Dynamics(TransmonQubit):
         t = np.linspace(0, t_max, n_points)
         states = self.free_evolution(rho1, t, f_frame=f_drive)
         p1 = self.populations([apply_s(s).full() for s in states])[:, 1]
-        fit = lambda x, tau, a, b, phi: b + a * np.exp(-x / tau) * np.cos(TWO_PI * detuning * x + phi)
-        popt, _ = curve_fit(fit, t, p1, p0=[t_max / 3, 0.5, 0.5, 0.0])
-        tau, a, b, _ = popt
+        # fringe frequency left free (the Lamb shift / pulse detuning can move it
+        # slightly); start from the FFT peak, phase from a linear least squares
+        spec = np.abs(np.fft.rfft(p1 - p1.mean(), n=8 * len(t)))
+        f0 = np.fft.rfftfreq(8 * len(t), t[1] - t[0])[np.argmax(spec)]
+        basis = np.column_stack([np.cos(TWO_PI * f0 * t), -np.sin(TWO_PI * f0 * t)])
+        c, s = np.linalg.lstsq(basis, p1 - p1.mean(), rcond=None)[0]
+        fit = lambda x, tau, a, b, phi, f: b + a * np.exp(-x / tau) * np.cos(TWO_PI * f * x + phi)
+        popt, _ = curve_fit(fit, t, p1, p0=[t_max / 3, np.hypot(c, s), p1.mean(), np.arctan2(s, c), f0])
+        tau, a, b = popt[:3]
         decay = abs(a) * np.exp(-t / tau)
-        return tau, t, p1, fit(t, *popt), (b - decay, b + decay)
+        return abs(tau), t, p1, fit(t, *popt), (b - decay, b + decay)
 
 
 def save_output(name, text=None, dpi=150):
     """
-    Save to DATA_DIR/name: `text` as .txt if given, otherwise the current
-    matplotlib figure as .png (then closed). Returns the path.
+    Save to the timestamped run folder: `text` as .txt if given, otherwise the
+    current matplotlib figure as .png (then closed). Returns the path.
     """
-    os.makedirs(DATA_DIR, exist_ok=True)
-    path = os.path.join(DATA_DIR, name if '.' in name else name + ('.txt' if text is not None else '.png'))
+    path = os.path.join(get_output_dir(), name if '.' in name else name + ('.txt' if text is not None else '.png'))
     if text is None:
         plt.savefig(path, dpi=dpi, bbox_inches='tight')
         plt.close()
