@@ -371,6 +371,68 @@ object is built (\texttt{coherence\_times}), and stored as \texttt{t1}, \texttt{
 and whether it is included.
 
 %------------------------------------------------------------------
+\section*{scqubits depolarization formulas (reference)}
+All formulas of the scqubits documentation page ``Noise: depolarization''
+(\texttt{scqubits.readthedocs.io/en/latest/guide/noise/depolarization.html}), written with
+$\hbar$ and $k_B$ explicit, as on that page (the code above uses the $\hbar = 1$, GHz/rad/ns
+conventions of this document). $T$ is the bath temperature (default $15$~mK).
+
+\paragraph{General rate and detailed balance.}
+Fermi's golden rule for a noise operator $B_\lambda$ with spectral density $S$:
+\begin{align}
+  \Gamma_{ij} &= \frac{1}{\hbar^2}\,\big|\braket{i|B_\lambda|j}\big|^2\,S(\omega_{ij}),
+  \qquad \omega_{ij} = \omega_j - \omega_i \\
+  \frac{S(\omega)}{S(-\omega)} &= \exp\!\left(\frac{\hbar\omega}{k_BT}\right)
+\end{align}
+$\omega_{ij} > 0$ is decay, $\omega_{ij} < 0$ excitation. By default $T_1$ uses the sum of the
+upward and downward rates (\texttt{total=True}).
+
+\paragraph{Capacitive noise (\texttt{t1\_capacitive}),} $B_\lambda = 2e\,\hat n$:
+\begin{align}
+  S(\omega) &= \frac{2\hbar}{C\,Q_{\rm cap}(\omega)}
+    \left(\frac{\coth\frac{\hbar|\omega|}{2k_BT}}{1 + \exp\!\left(-\frac{\hbar\omega}{k_BT}\right)}\right) \\
+  Q_{\rm cap}(\omega) &= 10^{6}\left(\frac{2\pi\times 6\,\text{GHz}}{|\omega|}\right)^{0.7}
+\end{align}
+
+\paragraph{Inductive noise (\texttt{t1\_inductive}),} $B_\lambda = \dfrac{\Phi_0}{2\pi}\,\hat\varphi$:
+\begin{align}
+  S(\omega) &= \frac{2\hbar}{L\,Q_{\rm ind}(\omega)}
+    \left(\frac{\coth\frac{\hbar|\omega|}{2k_BT}}{1 + \exp\!\left(-\frac{\hbar\omega}{k_BT}\right)}\right) \\
+  Q_{\rm ind}(\omega) &= 500\times 10^{6}\,
+    \frac{K_0\!\left(\frac{h\times 0.5\,\text{GHz}}{2k_BT}\right)\sinh\!\left(\frac{h\times 0.5\,\text{GHz}}{2k_BT}\right)}
+         {K_0\!\left(\frac{\hbar|\omega|}{2k_BT}\right)\sinh\!\left(\frac{\hbar|\omega|}{2k_BT}\right)}
+\end{align}
+with $K_0$ the modified Bessel function of the second kind.
+
+\paragraph{Charge-coupled impedance noise (\texttt{t1\_charge\_impedance}),} $B_\lambda = 2e\,\hat n$:
+\begin{align}
+  S(\omega) &= \frac{\hbar\omega}{\mathrm{Re}\,Z(\omega)}\left(1 + \coth\frac{\hbar|\omega|}{2k_BT}\right),
+  \qquad \mathrm{Re}\,Z(\omega) = 50\,\Omega\ \text{(default, infinite line)}
+\end{align}
+
+\paragraph{Flux-bias line noise (\texttt{t1\_flux\_bias\_line}),}
+$B_\lambda = \partial\hat H/\partial\Phi_x$, mutual inductance $M$ (default $400\,\Phi_0/\text{A}$),
+line impedance $R$ ($50\,\Omega$):
+\begin{equation}
+  S(\omega) = \frac{M^2\,\omega\,\hbar}{R}\left(1 + \coth\frac{\hbar|\omega|}{2k_BT}\right)
+\end{equation}
+
+\paragraph{Quasiparticle tunneling (\texttt{t1\_quasiparticle\_tunneling}),}
+$B_\lambda = \sin(\hat\varphi/2)$:
+\begin{align}
+  S(\omega) &= \hbar\omega\,\mathrm{Re}\,Y_{\rm qp}(\omega)\left(1 + \coth\frac{\hbar|\omega|}{2k_BT}\right) \\
+  \mathrm{Re}\,Y_{\rm qp}(\omega) &= \sqrt{\frac{2}{\pi}}\,\frac{8E_J}{R_k\Delta}
+    \left(\frac{2\Delta}{\hbar\omega}\right)^{3/2} x_{\rm qp}\,
+    K_0\!\left(\frac{\hbar|\omega|}{2k_BT}\right)\sinh\!\left(\frac{\hbar\omega}{2k_BT}\right)
+\end{align}
+$E_J$ is the Josephson energy ($E_J = \varphi_0^2/L_J$), $R_k$ the resistance quantum, $\Delta$ the
+superconducting gap ($3.4\times10^{-4}$~eV for Al) and $x_{\rm qp}$ the quasiparticle density
+(default $3\times10^{-6}$).
+
+\paragraph{User-defined noise (\texttt{t1}).} Any noise operator $B_\lambda$ and spectral density
+$S(\omega)$ can be passed in and enter the general rate $\Gamma_{ij}$ above.
+
+%------------------------------------------------------------------
 \section*{Driven dynamics with dissipation (\texttt{Transmon\_Resonator\_Dynamics})}
 A \texttt{TransmonQubit} whose $H_0$, $D$ and collapse operators live in the joint space
 $\mathcal{H}_q\otimes\mathcal{H}_r$ (dimension $N N_r$), lab frame, angular units (rad/ns), so
