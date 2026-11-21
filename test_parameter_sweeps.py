@@ -554,7 +554,7 @@ def noise_channel_specs(quick):
             formula='Γφ = 2π A_flux sqrt(2|ln(ω_low t_exp)|) |∂f01/∂Φ|'),
         'tphi_1_over_f_cc': dict(
             theory=th_tphi_cc, params=dict(A_cc=NOISE_PARAMS['A_cc']), op=_OP,
-            sweeps=_sweeps(quick, ej=_r('ej', 17), ec=_r('ec', 15), flux=_r('flux', 41)),
+            sweeps=_sweeps(quick, ej=_r('ej', 17), ec=_r('ec', 15), flux=_r('flux', 41), d=_r('d', 14)),
             formula='Γφ = 2π A_cc sqrt(2|ln(ω_low t_exp)|) |∂f01/∂EJ|,   ∂f01/∂EJ = sqrt(2 EC / EJ)'),
         'tphi_1_over_f_ng': dict(
             theory=th_tphi_ng, params=dict(A_ng=NOISE_PARAMS['A_ng']),
