@@ -346,13 +346,16 @@ def write_summary(results, out_dir):
 
 # synthetic measurements: T1 = 50 us, T_phi = 80 us, quasi-static detuning noise of
 # 4 kHz, readout contrast 0.9 (P_meas = 0.05 + 0.9 P_e), binomial shot noise
+# drive_detuning = Delta (MHz), the detuning you set on the drive; the frequency
+# noise delta ~ N(0, DEMO_SIGMA) is added shot by shot on top of it
+DEMO_SIGMA = 0.004
 DEMO_CASES = [
-    ('good', dict(detuning=0.2, t_max=150, n=301, shots=2000)),
-    ('undersampled', dict(detuning=0.85, t_max=150, n=151, shots=2000)),   # 1 us step: Nyquist 0.5 MHz
-    ('window_too_short', dict(detuning=0.2, t_max=15, n=151, shots=2000)),
-    ('window_too_long', dict(detuning=0.05, t_max=1500, n=301, shots=2000)),
-    ('few_shots', dict(detuning=0.2, t_max=150, n=301, shots=10)),
-    ('on_resonance', dict(detuning=0.0, t_max=150, n=301, shots=2000)),
+    ('good', dict(drive_detuning=0.2, t_max=150, n=301, shots=2000)),
+    ('undersampled', dict(drive_detuning=0.85, t_max=150, n=151, shots=2000)),   # 1 us step: Nyquist 0.5 MHz
+    ('window_too_short', dict(drive_detuning=0.2, t_max=15, n=151, shots=2000)),
+    ('window_too_long', dict(drive_detuning=0.05, t_max=1500, n=301, shots=2000)),
+    ('few_shots', dict(drive_detuning=0.2, t_max=150, n=301, shots=10)),
+    ('on_resonance', dict(drive_detuning=0.0, t_max=150, n=301, shots=2000)),
 ]
 
 
@@ -363,7 +366,7 @@ def make_demo_files(folder, seed=0):
     paths = []
     for name, c in DEMO_CASES:
         t = np.linspace(0, c['t_max'], c['n'])
-        p = quasi_static_average(ramsey_signal, t, c['detuning'], 0.004, t1=50.0, t_phi=80.0)
+        p = quasi_static_average(ramsey_signal, t, c['drive_detuning'], DEMO_SIGMA, t1=50.0, t_phi=80.0)
         y = rng.binomial(c['shots'], np.clip(0.05 + 0.9 * p, 0, 1)) / c['shots']
         path = os.path.join(folder, f'ramsey_{name}.csv')
         with open(path, 'w', newline='') as f:
